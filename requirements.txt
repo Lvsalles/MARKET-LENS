@@ -1,2 +1,5 @@
-pandas
 streamlit
+pandas
+google-generativeai
+openpyxl
+pypdf
