@@ -3,84 +3,105 @@ import pandas as pd
 import google.generativeai as genai
 from pypdf import PdfReader
 
-# 1. Page Setup
-st.set_page_config(page_title="AI Market Intelligence", layout="wide")
+# 1. Page Configuration
+st.set_page_config(page_title="AI Market Intelligence Pro", layout="wide")
 
-# 2. Security Verification
+# 2. API Key Setup
 if "GOOGLE_API_KEY" not in st.secrets:
-    st.error("🔑 Configuration Error: API Key missing in Streamlit Secrets.")
+    st.error("🔑 API Key missing. Please add GOOGLE_API_KEY to Streamlit Secrets.")
     st.stop()
 
-# Initialize AI
-try:
-    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    model = genai.GenerativeModel('gemini-1.5-flash')
-except Exception as e:
-    st.error(f"AI Setup Failed: {e}")
+# Initialize AI with fallback logic
+genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
-# 3. UI Header
-st.title("🤖 AI Real Estate Analyst")
-st.write("Professional market insights for **North Port, Venice, and Sarasota County**.")
+def get_model():
+    """Tries to initialize the best available model."""
+    # We try Flash first as it's faster/cheaper, then fallback to Pro
+    models_to_try = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+    for model_name in models_to_try:
+        try:
+            model = genai.GenerativeModel(model_name)
+            # Test a tiny generation to see if model exists/is authorized
+            return model
+        except:
+            continue
+    return None
+
+model = get_model()
+
+if not model:
+    st.error("❌ Model Error: Could not connect to any Gemini models. Please check your API Key permissions.")
+    st.stop()
+
+# 3. User Interface (Fluent English)
+st.title("🤖 AI Real Estate Market Analyst")
+st.subheader("Professional Market Insights for Florida & Beyond")
+st.write("Upload your data files (**CSV, Excel, or PDF**) to generate a strategic investment report.")
 st.markdown("---")
 
 # 4. File Upload Section
-uploaded_file = st.file_uploader("Upload your Property Data (CSV, Excel, or PDF)", type=['csv', 'xlsx', 'pdf'])
+uploaded_file = st.file_uploader("Drag and drop your property file here", type=['csv', 'xlsx', 'pdf'])
 
 if uploaded_file:
-    data_summary = ""
+    data_text = ""
     file_ext = uploaded_file.name.split('.')[-1].lower()
 
     try:
         # PDF Parsing
         if file_ext == 'pdf':
-            pdf_reader = PdfReader(uploaded_file)
-            raw_text = ""
-            for i, page in enumerate(pdf_reader.pages[:5]):
-                raw_text += page.extract_text()
-            data_summary = raw_text
-            st.success("✅ PDF parsed successfully.")
+            reader = PdfReader(uploaded_file)
+            pdf_text = ""
+            for i, page in enumerate(reader.pages[:5]): # Limit to 5 pages
+                pdf_text += page.extract_text()
+            data_text = pdf_text
+            st.success("✅ PDF loaded successfully.")
             
-        # Spreadsheet Parsing
+        # Spreadsheet Parsing (CSV/Excel)
         else:
             if file_ext == 'csv':
                 df = pd.read_csv(uploaded_file)
             else:
                 df = pd.read_excel(uploaded_file)
             
-            st.success("✅ Dataset loaded.")
-            st.subheader("Data Preview")
+            st.success("✅ Dataset loaded successfully.")
+            st.subheader("Data Preview (First 5 Rows)")
             st.dataframe(df.head(5))
-            # Send sample rows to AI
-            data_summary = df.head(15).to_string()
+            # Convert sample rows to text for AI
+            data_text = df.head(15).to_string()
 
-        # 5. Run Analysis
+        # 5. Analysis Execution
         st.markdown("---")
-        if st.button("🚀 Generate Market Report"):
-            with st.spinner('AI Analyst is reviewing the data...'):
+        if st.button("🚀 Generate Executive Market Report"):
+            with st.spinner('Analyzing market trends and pricing...'):
                 try:
                     prompt = f"""
-                    You are a Senior Real Estate Investment Advisor in Florida.
-                    Analyze the following data from the file: {uploaded_file.name}
+                    Role: Senior Florida Real Estate Investment Consultant.
+                    Task: Provide a professional executive summary for the following data:
                     
-                    {data_summary}
+                    File Name: {uploaded_file.name}
+                    Data Content Sample:
+                    {data_text}
                     
-                    Provide a professional executive summary in English:
-                    1. Market Snapshot: What does this data represent?
-                    2. Price Analysis: Identify average prices and outliers (high/low).
-                    3. Geographic Trends: Note key areas (Subdivisions/Cities).
-                    4. Strategic Recommendation: 3 actionable insights for an investor.
+                    The report must include:
+                    1. MARKET SNAPSHOT: Briefly describe what this data represents.
+                    2. PRICING INTELLIGENCE: Identify price ranges, averages, and any notable outliers.
+                    3. GEOGRAPHIC ANALYSIS: Highlight key neighborhoods or cities (e.g., North Port, Venice, Sarasota).
+                    4. INVESTMENT STRATEGY: Provide 3 professional recommendations for an investor or buyer.
+                    
+                    Language: Professional English. Format: Bullet points and bold headers.
                     """
                     
                     response = model.generate_content(prompt)
-                    st.markdown("### 📊 AI Market Intelligence Report")
+                    st.markdown("### 📊 AI Strategic Market Report")
                     st.write(response.text)
                     st.balloons()
                     
                 except Exception as e:
-                    st.error(f"AI Analysis Error: {e}")
+                    st.error(f"Analysis Error: {e}")
+                    st.info("Try uploading a smaller file or checking if your API Key is active in Google AI Studio.")
 
     except Exception as e:
-        st.error(f"Error processing file: {e}")
+        st.error(f"File Processing Error: {e}")
 
 else:
-    st.info("💡 Ready to start? Please upload an MLS export or property report.")
+    st.info("💡 Ready to analyze? Upload an MLS export or a PDF report above.")
