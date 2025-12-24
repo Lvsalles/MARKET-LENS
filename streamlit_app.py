@@ -2,46 +2,66 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 from pypdf import PdfReader
+import io
 
-# Configuração da IA
-genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-model = genai.GenerativeModel('gemini-1.5-flash')
+# 1. Configuração de Segurança (Secrets)
+try:
+    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+    model = genai.GenerativeModel('gemini-1.5-flash')
+except Exception as e:
+    st.error("Erro na Chave API. Verifique os Secrets no Streamlit Cloud.")
 
-st.title("🤖 Analista de Mercado Multiformato")
-st.write("Envia ficheiros CSV, Excel ou PDF para análise.")
+st.set_page_config(page_title="Market Analyst Pro", layout="wide")
+st.title("🤖 Analista Imobiliário IA")
+st.write("Suba arquivos CSV, Excel ou PDF para análise de mercado em North Port, Venice e região.")
 
-# Alteramos aqui para aceitar os novos formatos
-uploaded_file = st.file_uploader("Escolha o ficheiro", type=['csv', 'xlsx', 'pdf'])
+# 2. Upload de Arquivo (Aceita múltiplos formatos)
+uploaded_file = st.file_uploader("Arraste seu arquivo aqui", type=['csv', 'xlsx', 'pdf'])
 
 if uploaded_file:
-    texto_para_analise = ""
-    nome_ficheiro = uploaded_file.name
-
-    # LÓGICA PARA PDF
-    if nome_ficheiro.endswith('.pdf'):
-        reader = PdfReader(uploaded_file)
-        # Extrai o texto de todas as páginas
-        for page in reader.pages:
-            texto_para_analise += page.extract_text()
+    content_to_analyze = ""
+    
+    # Se for PDF
+    if uploaded_file.name.endswith('.pdf'):
+        pdf_reader = PdfReader(uploaded_file)
+        text = ""
+        for page in pdf_reader.pages:
+            text += page.extract_text()
+        content_to_analyze = text[:10000] # Limite para não travar
         st.success("PDF lido com sucesso!")
-        st.text_area("Conteúdo extraído do PDF", texto_para_analise[:500] + "...", height=150)
-
-    # LÓGICA PARA EXCEL OU CSV
-    else:
-        if nome_ficheiro.endswith('.csv'):
-            df = pd.read_csv(uploaded_file)
-        else:
-            df = pd.read_excel(uploaded_file)
         
-        st.success("Tabela carregada com sucesso!")
-        st.dataframe(df.head(10))
-        texto_para_analise = df.head(30).to_string()
-
-    # BOTÃO DE ANÁLISE (Funciona para qualquer um dos 3 formatos)
-    if st.button("🚀 Iniciar Análise Inteligente"):
-        with st.spinner('O Gemini está a processar o conteúdo...'):
-            prompt = f"Analisa este documento de mercado e extrai os pontos principais, tendências e recomendações: \n\n {texto_para_analise}"
+    # Se for Excel ou CSV
+    else:
+        try:
+            if uploaded_file.name.endswith('.csv'):
+                df = pd.read_csv(uploaded_file)
+            else:
+                df = pd.read_excel(uploaded_file)
             
-            response = model.generate_content(prompt)
-            st.markdown("### 📊 Relatório Final")
-            st.write(response.text)
+            st.success("Tabela carregada!")
+            st.dataframe(df.head(5)) # Mostra as primeiras 5 linhas
+            content_to_analyze = df.head(30).to_string() # Envia uma amostra para a IA
+        except Exception as e:
+            st.error(f"Erro ao ler tabela: {e}")
+
+    # 3. Botão de Análise
+    if st.button("🔍 Realizar Análise Estratégica"):
+        if content_to_analyze:
+            with st.spinner('A IA está processando os dados...'):
+                prompt = f"""
+                Analise os seguintes dados imobiliários de North Port/Venice:
+                {content_to_analyze}
+                
+                Por favor, forneça:
+                1. Um resumo geral do que se trata o arquivo.
+                2. Destaques de preços (médias, imóveis mais caros/baratos).
+                3. Identificação de oportunidades baseadas em localização (Subdivisions).
+                4. Recomendação estratégica para investidores.
+                Responda em Português.
+                """
+                
+                response = model.generate_content(prompt)
+                st.markdown("### 📋 Relatório de Inteligência de Mercado")
+                st.write(response.text)
+        else:
+            st.warning("Por favor, suba um arquivo primeiro.")
