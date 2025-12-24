@@ -2,105 +2,102 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 from pypdf import PdfReader
+import io
 
-# 1. Page Settings
-st.set_page_config(page_title="AI Market Intelligence Pro", layout="wide")
+# 1. Page Configuration
+st.set_page_config(page_title="Global Multi-Data Analyst", layout="wide")
 
-# 2. Connection Setup
+# 2. API Key Setup
 if "GOOGLE_API_KEY" not in st.secrets:
-    st.error("🔑 Configuration Error: GOOGLE_API_KEY not found in Streamlit Secrets.")
+    st.error("🔑 API Key missing in Streamlit Secrets.")
     st.stop()
 
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+model = genai.GenerativeModel('gemini-1.5-flash')
 
-@st.cache_resource
-def load_best_model():
-    """Automatically finds the best available model to avoid 404 errors."""
-    try:
-        # Ask Google which models are available for this API Key
-        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        
-        # Preference order
-        preferences = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro']
-        
-        for pref in preferences:
-            if pref in available_models:
-                return genai.GenerativeModel(pref), pref
-        
-        # Fallback to the first available if none of the above are found
-        if available_models:
-            return genai.GenerativeModel(available_models[0]), available_models[0]
-    except Exception as e:
-        st.error(f"Failed to fetch models: {e}")
-    return None, None
-
-model, model_name = load_best_model()
-
-# 3. Fluent English UI
-st.title("🤖 AI Real Estate Market Analyst")
-st.subheader("Professional Market Insights & Data Intelligence")
-if model_name:
-    st.caption(f"Connected to AI Engine: `{model_name}`")
+# 3. UI Header
+st.title("🤖 Global Multi-Source Market Analyst")
+st.subheader("Deep Analysis of Multiple Datasets")
 st.markdown("---")
 
-# 4. Data Upload
-uploaded_file = st.file_uploader("Upload Property Data (CSV, Excel, or PDF)", type=['csv', 'xlsx', 'pdf'])
+# 4. Multi-File Upload (Explicitly allowing multiple files)
+uploaded_files = st.file_uploader(
+    "Upload ALL your files here (CSV, XLSX, PDF)", 
+    type=['csv', 'xlsx', 'pdf'], 
+    accept_multiple_files=True
+)
 
-if uploaded_file:
-    data_payload = ""
-    file_ext = uploaded_file.name.split('.')[-1].lower()
+if uploaded_files:
+    full_analysis_context = ""
+    st.write(f"### 📑 Processing {len(uploaded_files)} file(s)...")
+    
+    for uploaded_file in uploaded_files:
+        file_ext = uploaded_file.name.split('.')[-1].lower()
+        
+        with st.expander(f"Data Insights: {uploaded_file.name}"):
+            try:
+                if file_ext == 'pdf':
+                    reader = PdfReader(uploaded_file)
+                    text = " ".join([p.extract_text() for p in reader.pages])
+                    full_analysis_context += f"\n--- DOCUMENT: {uploaded_file.name} ---\n{text}\n"
+                    st.success(f"Full PDF text captured.")
+                
+                else:
+                    # Read the entire spreadsheet
+                    if file_ext == 'csv':
+                        df = pd.read_csv(uploaded_file)
+                    else:
+                        df = pd.read_excel(uploaded_file)
+                    
+                    # Generate a COMPREHENSIVE Summary of ALL data
+                    # This captures the essence of 100% of the rows
+                    summary_stats = {
+                        "Total Records": len(df),
+                        "Average Price": df['Current Price_num'].mean() if 'Current Price_num' in df.columns else df.iloc[:, 1].mean(),
+                        "Top Subdivisions": df['Legal Subdivision Name'].value_counts().head(10).to_dict() if 'Legal Subdivision Name' in df.columns else "N/A",
+                        "Price Range": f"{df.iloc[:, 1].min()} to {df.iloc[:, 1].max()}",
+                        "Columns Found": df.columns.tolist()
+                    }
+                    
+                    st.write(summary_stats)
+                    st.dataframe(df.head(10)) # Preview for user
+                    
+                    # Add full summary and a large sample to the AI context
+                    full_analysis_context += f"\n--- DATABASE: {uploaded_file.name} ---\n"
+                    full_analysis_context += f"Full Statistical Summary: {summary_stats}\n"
+                    full_analysis_context += f"Data Sample (First 50 rows):\n{df.head(50).to_string()}\n"
 
-    try:
-        if file_ext == 'pdf':
-            reader = PdfReader(uploaded_file)
-            # Take text from first 5 pages
-            data_payload = " ".join([p.extract_text() for p in reader.pages[:5]])
-            st.success("✅ PDF Analysis Ready.")
-        else:
-            df = pd.read_csv(uploaded_file) if file_ext == 'csv' else pd.read_excel(uploaded_file)
-            st.success("✅ Spreadsheet Loaded.")
-            st.subheader("Data Preview")
-            st.dataframe(df.head(5))
-            # Convert sample data to text
-            data_payload = df.head(20).to_string()
+            except Exception as e:
+                st.error(f"Error reading {uploaded_file.name}: {e}")
 
-        # 5. Analysis Execution
-        st.markdown("---")
-        if st.button("🚀 Generate Strategic Market Report"):
-            if not model:
-                st.error("AI Model not initialized. Please check your API key.")
-            else:
-                with st.spinner('AI is analyzing market trends...'):
-                    try:
-                        prompt = f"""
-                        Role: Professional Florida Real Estate Consultant.
-                        Source: {uploaded_file.name}
-                        
-                        Context: Analyze the property data provided below and write a professional report in English.
-                        
-                        Data:
-                        {data_payload}
-                        
-                        Report Requirements:
-                        1. MARKET SNAPSHOT: Summarize the dataset (e.g., North Port area inventory).
-                        2. PRICING INTELLIGENCE: Analyze price points, averages, and outliers.
-                        3. GEOGRAPHIC INSIGHTS: Highlight specific subdivisions or zip codes showing activity.
-                        4. INVESTMENT STRATEGY: Provide 3 professional recommendations for a buyer/investor.
-                        
-                        Format the output with bold headers and clean bullet points.
-                        """
-                        
-                        response = model.generate_content(prompt)
-                        st.markdown("### 📊 AI Strategic Intelligence Report")
-                        st.write(response.text)
-                        st.balloons()
-                        
-                    except Exception as e:
-                        st.error(f"Analysis Error: {e}")
-                        st.info("Check if your API Key has 'Gemini' enabled in the Google AI Studio.")
-
-    except Exception as e:
-        st.error(f"File Processing Error: {e}")
+    # 5. Global Analysis Button
+    st.markdown("---")
+    if st.button("🚀 Run Deep Global Analysis"):
+        with st.spinner('Analyzing 100% of the provided data...'):
+            try:
+                prompt = f"""
+                You are a Senior Real Estate Market Analyst. 
+                I have provided multiple files containing thousands of records. 
+                
+                CONTENT TO ANALYZE:
+                {full_analysis_context}
+                
+                TASK:
+                Based on ALL the data above, provide a comprehensive English report:
+                1. EXECUTIVE SUMMARY: Cross-reference all files and describe the overall market inventory.
+                2. DEEP PRICING ANALYSIS: Use the statistical summaries to identify market value trends and outliers across all documents.
+                3. GEOGRAPHIC HOTSPOTS: Identify which subdivisions or cities dominate the data.
+                4. INVESTMENT STRATEGY: Provide 5 high-level professional insights for a buyer looking at these specific datasets.
+                
+                Format with bold headers and professional bullet points.
+                """
+                
+                response = model.generate_content(prompt)
+                st.markdown("### 📊 Global Intelligence Report")
+                st.write(response.text)
+                st.balloons()
+            except Exception as e:
+                st.error(f"Analysis failed: {e}")
 
 else:
-    st.info("💡 Pro Tip: Upload your MLS Export or Market Report to begin.")
+    st.info("💡 Select multiple files at once using 'Ctrl' or 'Cmd' to perform a comparative analysis.")
