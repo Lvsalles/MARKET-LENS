@@ -3,95 +3,84 @@ import pandas as pd
 import google.generativeai as genai
 from pypdf import PdfReader
 
-# 1. Page Configuration
-st.set_page_config(page_title="AI Real Estate Analyst", layout="wide")
+# 1. Page Setup
+st.set_page_config(page_title="AI Market Intelligence", layout="wide")
 
-# 2. API Key Security Check
+# 2. Security Verification
 if "GOOGLE_API_KEY" not in st.secrets:
-    st.error("🔑 Error: API Key not found in Streamlit Secrets.")
+    st.error("🔑 Configuration Error: API Key missing in Streamlit Secrets.")
     st.stop()
 
-# Configure Google Gemini
+# Initialize AI
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
     model = genai.GenerativeModel('gemini-1.5-flash')
 except Exception as e:
-    st.error(f"AI Configuration Error: {e}")
+    st.error(f"AI Setup Failed: {e}")
 
-# UI Header
-st.title("🤖 AI Real Estate Market Analyst")
-st.write("Upload your **CSV, Excel, or PDF** files for instant market insights.")
+# 3. UI Header
+st.title("🤖 AI Real Estate Analyst")
+st.write("Professional market insights for **North Port, Venice, and Sarasota County**.")
 st.markdown("---")
 
-# 3. File Upload Section
-uploaded_file = st.file_uploader("Drop your property data file here", type=['csv', 'xlsx', 'pdf'])
+# 4. File Upload Section
+uploaded_file = st.file_uploader("Upload your Property Data (CSV, Excel, or PDF)", type=['csv', 'xlsx', 'pdf'])
 
 if uploaded_file:
-    content_to_analyze = ""
-    file_extension = uploaded_file.name.split('.')[-1].lower()
+    data_summary = ""
+    file_ext = uploaded_file.name.split('.')[-1].lower()
 
     try:
-        # PDF Processing
-        if file_extension == 'pdf':
-            reader = PdfReader(uploaded_file)
-            pdf_text = ""
-            # Limit to first 5 pages for stability
-            for i, page in enumerate(reader.pages[:5]):
-                pdf_text += page.extract_text()
-            content_to_analyze = pdf_text
-            st.success("✅ PDF loaded successfully!")
-            st.info("Document Preview:")
-            st.text(content_to_analyze[:400] + "...")
-
-        # Spreadsheet Processing (CSV/XLSX)
+        # PDF Parsing
+        if file_ext == 'pdf':
+            pdf_reader = PdfReader(uploaded_file)
+            raw_text = ""
+            for i, page in enumerate(pdf_reader.pages[:5]):
+                raw_text += page.extract_text()
+            data_summary = raw_text
+            st.success("✅ PDF parsed successfully.")
+            
+        # Spreadsheet Parsing
         else:
-            if file_extension == 'csv':
+            if file_ext == 'csv':
                 df = pd.read_csv(uploaded_file)
             else:
                 df = pd.read_excel(uploaded_file)
             
-            st.success("✅ Spreadsheet loaded successfully!")
-            st.subheader("Data Preview (Top 5 Rows)")
+            st.success("✅ Dataset loaded.")
+            st.subheader("Data Preview")
             st.dataframe(df.head(5))
-            
-            # Send the first 15 rows to the AI to avoid size errors
-            content_to_analyze = df.head(15).to_string()
+            # Send sample rows to AI
+            data_summary = df.head(15).to_string()
 
-        # 4. AI Analysis Execution
+        # 5. Run Analysis
         st.markdown("---")
-        if st.button("🚀 Run AI Market Analysis"):
-            with st.spinner('AI is processing data and generating professional insights...'):
+        if st.button("🚀 Generate Market Report"):
+            with st.spinner('AI Analyst is reviewing the data...'):
                 try:
-                    # Professional Real Estate Prompt
                     prompt = f"""
-                    You are a Senior Real Estate Investment Analyst in Florida.
+                    You are a Senior Real Estate Investment Advisor in Florida.
                     Analyze the following data from the file: {uploaded_file.name}
                     
-                    Data Content:
-                    {content_to_analyze}
+                    {data_summary}
                     
-                    Please provide a professional report in English including:
-                    1. Data Summary: Identify if this is a listing list, sales report, or land data.
-                    2. Pricing Analysis: Average price, highest/lowest values, and price per sqft if available.
-                    3. Location Highlights: Top subdivisions or cities (e.g., North Port, Venice).
-                    4. Investment Strategy: 3 professional insights for a buyer or investor.
-                    
-                    Format the output with clear headings and bullet points.
+                    Provide a professional executive summary in English:
+                    1. Market Snapshot: What does this data represent?
+                    2. Price Analysis: Identify average prices and outliers (high/low).
+                    3. Geographic Trends: Note key areas (Subdivisions/Cities).
+                    4. Strategic Recommendation: 3 actionable insights for an investor.
                     """
                     
                     response = model.generate_content(prompt)
-                    
-                    # Display Results
                     st.markdown("### 📊 AI Market Intelligence Report")
                     st.write(response.text)
                     st.balloons()
                     
                 except Exception as e:
-                    st.error(f"AI Processing Error: {e}")
-                    st.info("Tip: If the file is too large, try uploading a smaller version.")
+                    st.error(f"AI Analysis Error: {e}")
 
     except Exception as e:
-        st.error(f"File Reading Error: {e}")
+        st.error(f"Error processing file: {e}")
 
 else:
-    st.info("💡 Pro Tip: Upload your MLS or Land export file to get started.")
+    st.info("💡 Ready to start? Please upload an MLS export or property report.")
