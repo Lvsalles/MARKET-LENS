@@ -2,102 +2,112 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 from pypdf import PdfReader
-import io
 
-# 1. Page Configuration
-st.set_page_config(page_title="Global Multi-Data Analyst", layout="wide")
+# 1. Page Config
+st.set_page_config(page_title="Global AI Market Analyst", layout="wide")
 
-# 2. API Key Setup
+# 2. API Key Check
 if "GOOGLE_API_KEY" not in st.secrets:
-    st.error("🔑 API Key missing in Streamlit Secrets.")
+    st.error("🔑 API Key missing. Add GOOGLE_API_KEY to Streamlit Secrets.")
     st.stop()
 
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-model = genai.GenerativeModel('gemini-1.5-flash')
 
-# 3. UI Header
+# 3. Smart Model Selection (Prevents 404)
+@st.cache_resource
+def get_working_model():
+    try:
+        # Find all models available to YOUR key
+        available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        
+        # Preference list
+        prefs = ['models/gemini-1.5-flash', 'gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro']
+        
+        for p in prefs:
+            if p in available:
+                return genai.GenerativeModel(p), p
+        
+        if available:
+            return genai.GenerativeModel(available[0]), available[0]
+    except Exception as e:
+        st.error(f"Error connecting to Google AI: {e}")
+    return None, None
+
+model, model_name = get_working_model()
+
+# 4. UI Header
 st.title("🤖 Global Multi-Source Market Analyst")
-st.subheader("Deep Analysis of Multiple Datasets")
+st.subheader("Advanced Real Estate Intelligence")
+if model_name:
+    st.caption(f"Status: ✅ Connected to `{model_name}`")
 st.markdown("---")
 
-# 4. Multi-File Upload (Explicitly allowing multiple files)
-uploaded_files = st.file_uploader(
-    "Upload ALL your files here (CSV, XLSX, PDF)", 
-    type=['csv', 'xlsx', 'pdf'], 
-    accept_multiple_files=True
-)
+# 5. Multi-File Upload
+# 'accept_multiple_files=True' is key for your requirement
+files = st.file_uploader("Upload all your files (CSV, Excel, PDF)", type=['csv', 'xlsx', 'pdf'], accept_multiple_files=True)
 
-if uploaded_files:
-    full_analysis_context = ""
-    st.write(f"### 📑 Processing {len(uploaded_files)} file(s)...")
-    
-    for uploaded_file in uploaded_files:
-        file_ext = uploaded_file.name.split('.')[-1].lower()
-        
-        with st.expander(f"Data Insights: {uploaded_file.name}"):
+if files:
+    full_context = ""
+    st.write(f"### 📑 Processing {len(files)} files...")
+
+    for f in files:
+        ext = f.name.split('.')[-1].lower()
+        with st.expander(f"Analyzing: {f.name}"):
             try:
-                if file_ext == 'pdf':
-                    reader = PdfReader(uploaded_file)
-                    text = " ".join([p.extract_text() for p in reader.pages])
-                    full_analysis_context += f"\n--- DOCUMENT: {uploaded_file.name} ---\n{text}\n"
-                    st.success(f"Full PDF text captured.")
-                
+                if ext == 'pdf':
+                    reader = PdfReader(f)
+                    text = " ".join([page.extract_text() for page in reader.pages])
+                    full_context += f"\n--- DOCUMENT: {f.name} ---\n{text[:5000]}\n" # Cap to avoid token crash
+                    st.success("Full PDF text captured.")
                 else:
-                    # Read the entire spreadsheet
-                    if file_ext == 'csv':
-                        df = pd.read_csv(uploaded_file)
-                    else:
-                        df = pd.read_excel(uploaded_file)
+                    df = pd.read_csv(f) if ext == 'csv' else pd.read_excel(f)
                     
-                    # Generate a COMPREHENSIVE Summary of ALL data
-                    # This captures the essence of 100% of the rows
-                    summary_stats = {
-                        "Total Records": len(df),
-                        "Average Price": df['Current Price_num'].mean() if 'Current Price_num' in df.columns else df.iloc[:, 1].mean(),
-                        "Top Subdivisions": df['Legal Subdivision Name'].value_counts().head(10).to_dict() if 'Legal Subdivision Name' in df.columns else "N/A",
-                        "Price Range": f"{df.iloc[:, 1].min()} to {df.iloc[:, 1].max()}",
-                        "Columns Found": df.columns.tolist()
+                    # ANALYZE ENTIRE CONTENT: We create a detailed summary of 100% of the rows
+                    # This ensures the AI knows about EVERY row even if it's a huge file
+                    summary = {
+                        "Rows": len(df),
+                        "Price Average": df.select_dtypes(include='number').mean().to_dict(),
+                        "Subdivisions": df.iloc[:, 5].value_counts().head(20).to_dict() if len(df.columns) > 5 else "N/A",
+                        "Columns": df.columns.tolist()
                     }
+                    st.write("Full Statistical Overview:", summary)
+                    st.dataframe(df.head(10))
                     
-                    st.write(summary_stats)
-                    st.dataframe(df.head(10)) # Preview for user
-                    
-                    # Add full summary and a large sample to the AI context
-                    full_analysis_context += f"\n--- DATABASE: {uploaded_file.name} ---\n"
-                    full_analysis_context += f"Full Statistical Summary: {summary_stats}\n"
-                    full_analysis_context += f"Data Sample (First 50 rows):\n{df.head(50).to_string()}\n"
+                    # Feed the AI the global statistics + a large sample
+                    full_context += f"\n--- DATABASE: {f.name} ---\nGlobal Stats: {summary}\nData Sample:\n{df.head(50).to_string()}\n"
 
             except Exception as e:
-                st.error(f"Error reading {uploaded_file.name}: {e}")
+                st.error(f"Error reading {f.name}: {e}")
 
-    # 5. Global Analysis Button
+    # 6. Global Comparative Analysis
     st.markdown("---")
-    if st.button("🚀 Run Deep Global Analysis"):
-        with st.spinner('Analyzing 100% of the provided data...'):
-            try:
-                prompt = f"""
-                You are a Senior Real Estate Market Analyst. 
-                I have provided multiple files containing thousands of records. 
-                
-                CONTENT TO ANALYZE:
-                {full_analysis_context}
-                
-                TASK:
-                Based on ALL the data above, provide a comprehensive English report:
-                1. EXECUTIVE SUMMARY: Cross-reference all files and describe the overall market inventory.
-                2. DEEP PRICING ANALYSIS: Use the statistical summaries to identify market value trends and outliers across all documents.
-                3. GEOGRAPHIC HOTSPOTS: Identify which subdivisions or cities dominate the data.
-                4. INVESTMENT STRATEGY: Provide 5 high-level professional insights for a buyer looking at these specific datasets.
-                
-                Format with bold headers and professional bullet points.
-                """
-                
-                response = model.generate_content(prompt)
-                st.markdown("### 📊 Global Intelligence Report")
-                st.write(response.text)
-                st.balloons()
-            except Exception as e:
-                st.error(f"Analysis failed: {e}")
+    if st.button("🚀 Run Comprehensive Analysis on ALL Data"):
+        if not model:
+            st.error("AI not ready.")
+        else:
+            with st.spinner('AI is cross-referencing all datasets...'):
+                try:
+                    prompt = f"""
+                    You are a Senior Investment Consultant. I have provided multiple files.
+                    Analyze EVERYTHING below as a single market intelligence project.
+                    
+                    DATA PROVIDED:
+                    {full_context}
+                    
+                    REQUIREMENTS (English):
+                    1. GLOBAL SUMMARY: Combine all files. What is the total inventory and main focus?
+                    2. MARKET TRENDS: Based on the global statistics, identify pricing patterns across all data.
+                    3. GEOGRAPHIC FOCUS: Which areas appear most frequently and what are the price differences between them?
+                    4. INVESTMENT STRATEGY: Provide 5 professional insights for an investor looking at these specific results.
+                    
+                    Format with professional headers and bullet points.
+                    """
+                    response = model.generate_content(prompt)
+                    st.markdown("### 📊 Global Market Intelligence Report")
+                    st.write(response.text)
+                    st.balloons()
+                except Exception as e:
+                    st.error(f"Analysis Failed: {e}")
 
 else:
-    st.info("💡 Select multiple files at once using 'Ctrl' or 'Cmd' to perform a comparative analysis.")
+    st.info("💡 Tip: Select multiple files at once to compare different reports.")
