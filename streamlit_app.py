@@ -2,93 +2,96 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 from pypdf import PdfReader
-import io
 
-# 1. Configuração de Inicialização e Segurança
-st.set_page_config(page_title="AI Market Analyst Pro", layout="wide")
+# 1. Page Configuration
+st.set_page_config(page_title="AI Real Estate Analyst", layout="wide")
 
-# Tentar configurar a API através do Secrets
+# 2. API Key Security Check
 if "GOOGLE_API_KEY" not in st.secrets:
-    st.error("ERRO: Chave API não encontrada nos Secrets do Streamlit.")
+    st.error("🔑 Error: API Key not found in Streamlit Secrets.")
     st.stop()
 
-genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-model = genai.GenerativeModel('gemini-1.5-flash')
+# Configure Google Gemini
+try:
+    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+    model = genai.GenerativeModel('gemini-1.5-flash')
+except Exception as e:
+    st.error(f"AI Configuration Error: {e}")
 
-# Cabeçalho da Ferramenta
-st.title("🤖 Analista Imobiliário Inteligente")
-st.write("Suporte para: **CSV, Excel (.xlsx) e PDF**")
+# UI Header
+st.title("🤖 AI Real Estate Market Analyst")
+st.write("Upload your **CSV, Excel, or PDF** files for instant market insights.")
 st.markdown("---")
 
-# 2. Upload de Arquivos
-uploaded_file = st.file_uploader("Arraste ou selecione o arquivo para análise", type=['csv', 'xlsx', 'pdf'])
+# 3. File Upload Section
+uploaded_file = st.file_uploader("Drop your property data file here", type=['csv', 'xlsx', 'pdf'])
 
 if uploaded_file:
     content_to_analyze = ""
-    file_type = uploaded_file.name.split('.')[-1].lower()
+    file_extension = uploaded_file.name.split('.')[-1].lower()
 
     try:
-        # LÓGICA PARA PDF
-        if file_type == 'pdf':
+        # PDF Processing
+        if file_extension == 'pdf':
             reader = PdfReader(uploaded_file)
             pdf_text = ""
-            # Lemos apenas as primeiras 10 páginas para evitar erro de tamanho
-            for i, page in enumerate(reader.pages[:10]):
+            # Limit to first 5 pages for stability
+            for i, page in enumerate(reader.pages[:5]):
                 pdf_text += page.extract_text()
             content_to_analyze = pdf_text
-            st.success("✅ PDF carregado com sucesso!")
-            st.info("Resumo do conteúdo detectado no PDF:")
-            st.text(content_to_analyze[:300] + "...")
+            st.success("✅ PDF loaded successfully!")
+            st.info("Document Preview:")
+            st.text(content_to_analyze[:400] + "...")
 
-        # LÓGICA PARA EXCEL OU CSV
+        # Spreadsheet Processing (CSV/XLSX)
         else:
-            if file_type == 'csv':
+            if file_extension == 'csv':
                 df = pd.read_csv(uploaded_file)
             else:
                 df = pd.read_excel(uploaded_file)
             
-            st.success("✅ Planilha carregada com sucesso!")
-            st.subheader("Prévia dos Dados (Top 5 linhas)")
+            st.success("✅ Spreadsheet loaded successfully!")
+            st.subheader("Data Preview (Top 5 Rows)")
             st.dataframe(df.head(5))
             
-            # Convertemos apenas as primeiras 15 linhas para texto 
-            # para evitar o erro 'InvalidArgument' (limite de tamanho)
+            # Send the first 15 rows to the AI to avoid size errors
             content_to_analyze = df.head(15).to_string()
 
-        # 3. Botão de Execução da IA
+        # 4. AI Analysis Execution
         st.markdown("---")
-        if st.button("🚀 Iniciar Análise com IA"):
-            with st.spinner('A IA está processando os dados e gerando insights...'):
+        if st.button("🚀 Run AI Market Analysis"):
+            with st.spinner('AI is processing data and generating professional insights...'):
                 try:
-                    # Criamos o comando (Prompt) para a IA
+                    # Professional Real Estate Prompt
                     prompt = f"""
-                    Você é um especialista em análise de dados e mercado imobiliário da Flórida.
-                    Analise o conteúdo abaixo extraído do arquivo {uploaded_file.name}:
+                    You are a Senior Real Estate Investment Analyst in Florida.
+                    Analyze the following data from the file: {uploaded_file.name}
                     
+                    Data Content:
                     {content_to_analyze}
                     
-                    Com base nesses dados, gere um relatório profissional contendo:
-                    1. Resumo do tipo de dado (é uma lista de imóveis, terrenos, relatório de vendas?).
-                    2. Análise de preços (média de valor, o mais caro e o mais barato).
-                    3. Localizações em destaque (Cidades ou Subdivisions).
-                    4. 3 Insights estratégicos para investimento.
+                    Please provide a professional report in English including:
+                    1. Data Summary: Identify if this is a listing list, sales report, or land data.
+                    2. Pricing Analysis: Average price, highest/lowest values, and price per sqft if available.
+                    3. Location Highlights: Top subdivisions or cities (e.g., North Port, Venice).
+                    4. Investment Strategy: 3 professional insights for a buyer or investor.
                     
-                    Responda em Português de forma clara e organizada.
+                    Format the output with clear headings and bullet points.
                     """
                     
                     response = model.generate_content(prompt)
                     
-                    # Exibição do Resultado
-                    st.markdown("### 📊 Relatório de Inteligência de Mercado")
+                    # Display Results
+                    st.markdown("### 📊 AI Market Intelligence Report")
                     st.write(response.text)
                     st.balloons()
                     
                 except Exception as e:
-                    st.error(f"Erro ao processar com a IA: {e}")
-                    st.info("Dica: Se o arquivo for muito grande, tente subir uma versão com menos linhas.")
+                    st.error(f"AI Processing Error: {e}")
+                    st.info("Tip: If the file is too large, try uploading a smaller version.")
 
     except Exception as e:
-        st.error(f"Erro ao ler o arquivo: {e}")
+        st.error(f"File Reading Error: {e}")
 
 else:
-    st.info("Aguardando upload de arquivo para começar...")
+    st.info("💡 Pro Tip: Upload your MLS or Land export file to get started.")
