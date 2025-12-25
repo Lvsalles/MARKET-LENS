@@ -2,120 +2,149 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import google.generativeai as genai
-from sklearn.linear_model import LinearRegression
-import folium
+from folium import Map, Marker, Icon, Circle, Popup
 from streamlit_folium import folium_static
+from sklearn.linear_model import LinearRegression
+from pypdf import PdfReader
+import io
 
-# 1. SETUP INICIAL
-st.set_page_config(page_title="AI Predictive Investor", layout="wide")
+# 1. SETUP DE ELITE
+st.set_page_config(page_title="AI Strategic Command Center", layout="wide")
+
+if "GOOGLE_API_KEY" not in st.secrets:
+    st.error("🔑 API Key não encontrada nos Secrets.")
+    st.stop()
+
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
-# 2. BIBLIOTECA DE ZONEAMENTO (ADU VIABILITY)
-# Mapeamento de leis locais de North Port / Venice
-ZONING_ADU_RULES = {
-    'RSF1': 'Low Potential (Strict setbacks)',
-    'RSF2': 'High Potential (ADU allowed with permit)',
-    'RSF3': 'Moderate Potential',
-    'RMH': 'Mobile Home Zone (Check park rules)',
-    'AG': 'High Potential (Acreage allows ADUs)'
+# 2. BIBLIOTECA DE PADRONIZAÇÃO E ZONEAMENTO
+SYNONYMS = {
+    'Price': ['Current Price', 'Price', 'List Price', 'Sold Price', 'Zestimate'],
+    'SqFt': ['Heated Area', 'Heated Area_num', 'SqFt', 'Living Area'],
+    'Beds': ['Beds', 'Bedrooms', 'Beds_num'],
+    'Baths': ['Full Baths', 'Bathrooms', 'Full Baths_num'],
+    'Zip': ['Zip', 'Zip Code', 'PostalCode'],
+    'Status': ['Status', 'LSC List Side', 'Listing Status'],
+    'Address': ['Address', 'Full Address', 'Street Address'],
+    'Zoning': ['Zoning', 'Zoning Code', 'Land Use'],
+    'Year': ['Year Built', 'Year Built_num'],
+    'Pool': ['Pool', 'Pool Private', 'Pool Features']
 }
 
-# 3. MOTOR DE NORMALIZAÇÃO
-def advanced_normalize(df):
-    mapping = {
-        'Price': ['Current Price', 'Price', 'List Price', 'Sold Price'],
-        'SqFt': ['Heated Area', 'Heated Area_num', 'SqFt'],
-        'Beds': ['Beds', 'Bedrooms', 'Beds_num'],
-        'Baths': ['Full Baths', 'Bathrooms', 'Full Baths_num'],
-        'Zip': ['Zip', 'Zip Code'],
-        'Zoning': ['Zoning', 'Zoning Code']
-    }
-    for std, syns in mapping.items():
+# Regras de ADU baseadas em zoneamentos comuns de Sarasota/Charlotte
+ADU_VIABILITY = {
+    'RSF1': 'Low - Strict Setbacks',
+    'RSF2': 'High - Accessory Unit Friendly',
+    'RSF3': 'Moderate - Zoning Review Required',
+    'RMH': 'High - Specific for Mobile/Manufactured',
+    'AG': 'Maximum - Large Acreage Potential'
+}
+
+# 3. MOTORES DE PROCESSAMENTO
+def normalize_investor_data(df):
+    for std, syns in SYNONYMS.items():
         found = next((c for c in syns if c in df.columns), None)
         if found: df = df.rename(columns={found: std})
     
-    # Limpeza e conversão
+    # Limpeza de dados
     if 'Price' in df.columns:
         df['Price'] = pd.to_numeric(df['Price'].astype(str).str.replace(r'[$,]', '', regex=True), errors='coerce')
     if 'SqFt' in df.columns:
-        df['Price_SqFt'] = df['Price'] / df['SqFt']
+        df['SqFt'] = pd.to_numeric(df['SqFt'], errors='coerce')
     
-    return df.dropna(subset=['Price', 'SqFt', 'Beds'])
+    return df.dropna(subset=['Price', 'SqFt'])
 
-# 4. MOTOR DE REGRESSÃO (PREVISÃO DE PREÇO JUSTO)
-def find_undervalued_assets(df):
-    if len(df) < 10: return df
-    
-    # Preparar variáveis para o modelo
+def perform_arbitrage_regression(df):
+    """Calcula o 'Fair Value' usando Regressão Multivariada"""
+    if len(df) < 5: return df
     X = df[['SqFt', 'Beds', 'Baths']].fillna(0)
     y = df['Price']
-    
-    model = LinearRegression()
-    model.fit(X, y)
-    
-    # Prever Preço Justo e calcular Residual (Diferença)
+    model = LinearRegression().fit(X, y)
     df['Fair_Value'] = model.predict(X)
-    df['Arbitrage_Potential'] = df['Fair_Value'] - df['Price']
-    df['Opportunity_Score'] = (df['Arbitrage_Potential'] / df['Price']) * 100
-    
-    return df.sort_values(by='Opportunity_Score', ascending=False)
+    df['Arbitrage_Gap'] = df['Fair_Value'] - df['Price']
+    df['Opportunity_Score'] = (df['Arbitrage_Gap'] / df['Price']) * 100
+    return df
 
-# ---------------------------------------------------------
-# UI TERMINAL
-# ---------------------------------------------------------
-st.title("🏙️ Predictive Investment Terminal")
-st.sidebar.header("🎯 Parâmetros de Filtro")
+# 4. INTERFACE SIDEBAR
+st.sidebar.title("💎 Intelligence Terminal")
+module = st.sidebar.selectbox("Módulo de Análise", 
+    ["Overview Econômico & Social", "CMA & Arbitragem Preditiva", "Viabilidade de ADU & Zoneamento"])
 
-uploaded_files = st.file_uploader("Upload MLS Data (CSV/XLSX)", accept_multiple_files=True)
+report_style = st.sidebar.radio("Estilo de Consultoria", ["McKinsey & Co", "Deloitte Strategy", "Zillow/Redfin Trendline"])
 
-if uploaded_files:
+# 5. UI PRINCIPAL
+st.title("🏙️ Real Estate Intelligence Command Center")
+st.markdown("---")
+
+files = st.file_uploader("Upload MLS Data, Zoning PDFs or Market Reports", accept_multiple_files=True)
+
+if files:
     dfs = []
-    for f in uploaded_files:
-        df = pd.read_csv(f) if f.name.endswith('.csv') else pd.read_excel(f)
-        dfs.append(advanced_normalize(df))
+    docs_text = ""
     
+    for f in files:
+        ext = f.name.split('.')[-1].lower()
+        if ext in ['csv', 'xlsx']:
+            df = pd.read_csv(f) if ext == 'csv' else pd.read_excel(f)
+            dfs.append(normalize_investor_data(df))
+        elif ext == 'pdf':
+            docs_text += " ".join([p.extract_text() for p in PdfReader(f).pages[:5]])
+
     if dfs:
-        main_df = pd.concat(dfs, ignore_index=True)
+        master_df = pd.concat(dfs, ignore_index=True)
         
-        # Filtros Dinâmicos
-        min_beds = st.sidebar.slider("Min Bedrooms", 1, 5, 3)
-        max_price = st.sidebar.number_input("Max Budget", value=500000)
-        
-        filtered_df = main_df[(main_df['Beds'] >= min_beds) & (main_df['Price'] <= max_price)]
-        
-        # Executar Inteligência Preditiva
-        scored_df = find_undervalued_assets(filtered_df)
+        # Módulo de Mapeamento Geoespacial
+        st.subheader("📍 Localização Estratégica & Densidade")
+        m = Map(location=[27.05, -82.25], zoom_start=11)
+        for _, row in master_df.dropna(subset=['Address']).head(100).iterrows():
+            # Coordenadas aproximadas por dispersão se não houver Lat/Long
+            folium_loc = [27.05 + np.random.uniform(-0.06, 0.06), -82.25 + np.random.uniform(-0.06, 0.06)]
+            color = 'green' if row.get('Arbitrage_Gap', 0) > 20000 else 'blue'
+            Marker(location=folium_loc, 
+                   popup=f"{row['Address']}<br>Price: ${row['Price']:,.0f}",
+                   icon=Icon(color=color, icon='home')).add_to(m)
+        folium_static(m)
 
-        # SEÇÃO 1: OPORTUNIDADES DE ARBITRAGEM
-        st.subheader("💎 Top Arbitrage Opportunities (Undervalued)")
-        st.dataframe(scored_df[['Address', 'Price', 'Fair_Value', 'Opportunity_Score', 'Zip']].head(10))
-        st.caption("Nota: 'Fair Value' é calculado via Regressão Multivariada baseada nos seus dados.")
+        # Módulo Analítico por Variável
+        if module == "CMA & Arbitragem Preditiva":
+            st.subheader("📊 Arbitragem Baseada em Regressão Multivariada")
+            scored_df = perform_arbitrage_regression(master_df)
+            st.dataframe(scored_df[['Address', 'Price', 'Fair_Value', 'Opportunity_Score', 'Beds', 'SqFt']].sort_values(by='Opportunity_Score', ascending=False).head(10))
+            st.info("💡 Propriedades com Opportunity Score positivo estão SUBVALORIZADAS em relação ao mercado local.")
 
-        # SEÇÃO 2: VIABILIDADE DE ADU
-        if 'Zoning' in scored_df.columns:
-            st.subheader("🏗️ ADU Feasibility (Construction Potential)")
-            scored_df['ADU_Potential'] = scored_df['Zoning'].map(ZONING_ADU_RULES).fillna('Unknown')
-            adu_hits = scored_df[scored_df['ADU_Potential'].str.contains('High')]
-            st.write(f"Encontradas **{len(adu_hits)}** propriedades com alto potencial de construção extra.")
-            st.dataframe(adu_hits[['Address', 'Zoning', 'ADU_Potential', 'Price']])
+        # BOTÃO DE GERAR RELATÓRIO
+        st.markdown("---")
+        if st.button("🚀 GERAR RELATÓRIO ESTRATÉGICO INTEGRADO"):
+            with st.spinner('AI analisando cruzamentos socioeconômicos e tendências globais...'):
+                try:
+                    # Payload de dados para a IA
+                    context = {
+                        "stats": master_df.describe().to_string(),
+                        "zips": master_df['Zip'].value_counts().head(5).to_dict() if 'Zip' in master_df.columns else "N/A",
+                        "adu": master_df['Zoning'].value_counts().to_dict() if 'Zoning' in master_df.columns else "N/A"
+                    }
 
-        # SEÇÃO 3: RELATÓRIO ESTRATÉGICO IA
-        if st.button("🚀 Gerar Due Diligence AI Report"):
-            with st.spinner('AI analisando riscos e viabilidade financeira...'):
-                # Resumo para a IA focar no ROI
-                top_opportunity = scored_df.iloc[0].to_dict() if not scored_df.empty else {}
-                
-                prompt = f"""
-                Você é um consultor de Due Diligence da Deloitte. 
-                Analise esta oportunidade de topo: {top_opportunity}
-                
-                Cruze com:
-                1. Taxas de juros atuais (6-7%) e impacto no ROI.
-                2. Viabilidade de construir uma ADU (Guest House) nesta zona.
-                3. Tendências PWC para o mercado de Sarasota County em 2025.
-                4. Recomendação de "Exit Strategy" (Flip vs Build-to-Rent).
-                """
-                
-                model = genai.GenerativeModel('gemini-1.5-flash')
-                response = model.generate_content(prompt)
-                st.markdown(response.text)
+                    prompt = f"""
+                    Aja como um Senior Strategist da {report_style}. Analise estes dados reais:
+                    
+                    DADOS MLS: {context['stats']}
+                    ZIP HOTSPOTS: {context['zips']}
+                    ZONEAMENTO: {context['adu']}
+                    TEXTO EXTRA: {docs_text[:2000]}
+
+                    OBJETIVOS DO RELATÓRIO:
+                    1. OVERVIEW DA CIDADE: Identifique Condado, População, Emprego e Escolas por Zip Code.
+                    2. ARBITRAGEM: Identifique padrões escondidos onde quartos/piscina não estão precificados corretamente.
+                    3. ZONEAMENTO E ADU: Aponte quais propriedades têm maior potencial de lucro via construção adicional.
+                    4. TENDÊNCIAS: Cruze com dados atuais de Zillow, Redfin e consultorias globais para o mercado de 2025.
+                    5. PRÓXIMOS PASSOS NO CÓDIGO: Enriquecimento de dados e Modelagem Preditiva.
+                    
+                    Linguagem: Profissional English.
+                    """
+                    
+                    response = genai.GenerativeModel('gemini-1.5-flash').generate_content(prompt)
+                    st.markdown("### 📊 Strategic Intelligence & Due Diligence")
+                    st.write(response.text)
+                    st.balloons()
+                except Exception as e:
+                    st.error(f"Erro na IA: {e}")
