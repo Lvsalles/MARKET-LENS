@@ -2,154 +2,138 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 from pypdf import PdfReader
+from docx import Document
 import numpy as np
 
-# 1. Configuração de Página
-st.set_page_config(page_title="AI Market Intelligence", layout="wide")
+# 1. Configuração de Página e Estilo
+st.set_page_config(page_title="AI Market Lens Hub", layout="wide")
 
-# 2. Biblioteca de Padronização (The Brain)
-# Mapeia diferentes nomes de colunas para um padrão único para a análise
-COLUMN_MAPPING = {
-    'Price': ['Current Price', 'Current Price_num', 'List Price', 'Sold Price', 'Price'],
-    'Status': ['Status', 'Status_clean', 'LSC List Side', 'Status_norm'],
-    'Subdivision': ['Legal Subdivision Name', 'Subdivision/Condo Name', 'Subdivision'],
-    'City': ['City'],
-    'Zip': ['Zip', 'Zip Code'],
-    'Beds': ['Beds', 'Beds_num', 'Bedrooms'],
-    'Baths': ['Full Baths', 'Full Baths_num', 'Bathrooms'],
-    'SqFt': ['Heated Area', 'Heated Area_num', 'SqFt', 'Living Area'],
-    'YearBuilt': ['Year Built', 'Year Built_num'],
-    'DOM': ['CDOM', 'ADOM', 'Days to Contract', 'DOM', 'Days to Contract_num'],
-    'LotSize': ['Total Acreage', 'Total Acreage_num', 'Lot Size Square Footage', 'Lot Size Square Footage_num']
-}
-
-STATUS_MAPPING = {
-    'ACT': 'Active', 'Active': 'Active', 'A': 'Active',
-    'SLD': 'Sold', 'Sold': 'Sold', 'S': 'Sold', 'Closed': 'Sold',
-    'PND': 'Pending', 'Pending': 'Pending', 'P': 'Pending', 'Under Contract': 'Pending'
-}
-
-# 3. Inicialização Segura da API
+# 2. Inicialização Segura da API
 if "GOOGLE_API_KEY" not in st.secrets:
-    st.error("🔑 API Key missing in Streamlit Secrets.")
+    st.error("🔑 API Key em falta. Adicione GOOGLE_API_KEY nos Secrets do Streamlit.")
     st.stop()
 
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
-@st.cache_resource
-def get_best_model():
-    """Descobre automaticamente qual modelo o seu acesso permite usar para evitar o erro 404."""
-    try:
-        available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        prefs = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro']
-        for p in prefs:
-            if p in available: return genai.GenerativeModel(p), p
-        return genai.GenerativeModel(available[0]), available[0]
-    except: return None, None
+# 3. Biblioteca Universal de Padronização (Mapeamento de Sinónimos)
+SYNONYMS_LIB = {
+    'columns': {
+        'Current Price': 'Price', 'Current Price_num': 'Price', 'List Price': 'Price', 'Sold Price': 'Price',
+        'Zestimate': 'Price', 'Redfin Estimate': 'Price',
+        'Legal Subdivision Name': 'Subdivision', 'Subdivision/Condo Name': 'Subdivision',
+        'Heated Area': 'SqFt', 'Heated Area_num': 'SqFt', 'Living Area': 'SqFt',
+        'CDOM': 'DOM', 'ADOM': 'DOM', 'Days to Contract': 'DOM',
+        'Status_clean': 'Status', 'LSC List Side': 'Status', 'Listing Status': 'Status',
+        'Address': 'Address', 'Full Address': 'Address', 'Street Address': 'Address'
+    },
+    'status_values': {
+        'ACT': 'Active', 'Active': 'Active', 'A': 'Active',
+        'SLD': 'Sold', 'Sold': 'Sold', 'S': 'Sold', 'Closed': 'Sold',
+        'PND': 'Pending', 'Pending': 'Pending', 'P': 'Pending'
+    }
+}
 
-model, model_name = get_best_model()
+# 4. Funções de Extração de Dados
+def parse_docx(file):
+    doc = Document(file)
+    return "\n".join([p.text for p in doc.paragraphs])
 
-# 4. Funções de Processamento
-def normalize_dataframe(df, filename):
-    # Identifica Categoria
-    name_low = filename.lower()
-    category = "Residential"
-    if "land" in name_low or "lots" in name_low: category = "Land"
-    elif "rent" in name_low or "lease" in name_low: category = "Rental"
-
-    # Aplica Biblioteca de Padronização
-    new_df = df.copy()
-    for standard_name, synonyms in COLUMN_MAPPING.items():
-        found = next((c for c in synonyms if c in df.columns), None)
-        if found:
-            # Se houver uma versão numérica (_num), prefere ela
-            num_version = next((c for c in df.columns if c == found + "_num"), found)
-            new_df[standard_name] = df[num_version]
-
-    # Remove duplicatas de colunas renomeadas
-    new_df = new_df.loc[:, ~new_df.columns.duplicated()]
-
-    # Traduz Status
-    if 'Status' in new_df.columns:
-        new_df['Status'] = new_df['Status'].map(STATUS_MAPPING).fillna(new_df['Status'])
+def process_file(uploaded_file):
+    name = uploaded_file.name.lower()
+    ext = name.split('.')[-1]
     
-    # Limpa Preços
-    if 'Price' in new_df.columns:
-        new_df['Price'] = pd.to_numeric(new_df['Price'].astype(str).str.replace(r'[$,]', '', regex=True), errors='coerce')
-
-    return new_df, category
-
-def get_variable_analysis(df):
-    """Realiza análise variável por variável para alimentar a IA."""
-    analysis = {}
-    for col in ['Price', 'Beds', 'Baths', 'SqFt', 'DOM', 'LotSize', 'YearBuilt']:
-        if col in df.columns and pd.api.types.is_numeric_dtype(df[col]):
-            analysis[col] = {
-                "Average": round(df[col].mean(), 2),
-                "Min": df[col].min(),
-                "Max": df[col].max()
-            }
+    if ext == 'pdf':
+        reader = PdfReader(uploaded_file)
+        return " ".join([p.extract_text() for p in reader.pages[:10]]), "PDF_Document"
+    elif ext == 'docx':
+        return parse_docx(uploaded_file), "Word_Document"
+    
+    # Processamento de Planilhas (CSV/XLSX)
+    df = pd.read_csv(uploaded_file) if ext == 'csv' else pd.read_excel(uploaded_file)
+    
+    # Padronização de Colunas
+    df = df.rename(columns={k: v for k, v in SYNONYMS_LIB['columns'].items() if k in df.columns})
+    df = df.loc[:, ~df.columns.duplicated(keep='last')]
+    
     if 'Status' in df.columns:
-        analysis['Market_Status'] = df['Status'].value_counts().to_dict()
-    if 'Subdivision' in df.columns:
-        analysis['Top_Hotspots'] = df['Subdivision'].value_counts().head(10).to_dict()
-    return analysis
+        df['Status'] = df['Status'].map(SYNONYMS_LIB['status_values']).fillna(df['Status'])
+    
+    if 'Price' in df.columns:
+        df['Price'] = pd.to_numeric(df['Price'].astype(str).str.replace(r'[$,]', '', regex=True), errors='coerce')
 
-# 5. Interface Streamlit
-st.title("🤖 AI Strategic Market Analyst")
-st.subheader("Global Multi-Source Intelligence System")
-if model_name: st.caption(f"Engine: `{model_name}`")
+    # Identificação de Categoria
+    cat = "Residential"
+    if "land" in name or "acreage" in str(df.columns).lower(): cat = "Land"
+    elif "rent" in name or "lease" in str(df.columns).lower(): cat = "Rental"
+    elif any(p in name for p in ["zillow", "redfin", "realtor"]): cat = "Portal_Data"
+    
+    return df, cat
+
+# 5. Interface Lateral (Sidebar) - Filtros e Níveis
+st.sidebar.header("🔍 Configuração da Análise")
+analysis_mode = st.sidebar.selectbox(
+    "Nível de Detalhe", 
+    ["Análise de Mercado Global", "Análise por Endereço/Propriedade", "Análise de Portais (Zillow/Redfin)", "Desempenho de Agentes"]
+)
+
+# 6. Interface Principal
+st.title("🏙️ Real Estate Intelligence Station")
 st.markdown("---")
 
-uploaded_files = st.file_uploader("Upload MLS, Land or Rental files (CSV/XLSX/PDF)", accept_multiple_files=True)
+files = st.file_uploader("Arraste os seus arquivos (CSV, XLSX, PDF, DOCX)", accept_multiple_files=True)
 
-if uploaded_files:
-    aggregated_intel = ""
+if files:
+    full_data_context = f"MODO DE ANÁLISE: {analysis_mode}\n\n"
     
-    for f in uploaded_files:
-        with st.expander(f"Analyzing Variables: {f.name}"):
-            if f.name.endswith('.pdf'):
-                reader = PdfReader(f)
-                text = " ".join([p.extract_text() for p in reader.pages[:5]])
-                aggregated_intel += f"\n[DOCUMENT: {f.name}]\n{text[:3000]}\n"
-                st.info("PDF Content Extracted.")
+    for f in files:
+        with st.expander(f"📁 Processando: {f.name}"):
+            res, category = process_file(f)
+            
+            if isinstance(res, pd.DataFrame):
+                # Análise Variável por Variável
+                stats = {
+                    "Total_Linhas": len(res),
+                    "Preço_Médio": res['Price'].mean() if 'Price' in res.columns else 0,
+                    "Top_Subdivisões": res['Subdivision'].value_counts().head(5).to_dict() if 'Subdivision' in res.columns else {},
+                    "Status_Distribuição": res['Status'].value_counts().to_dict() if 'Status' in res.columns else {}
+                }
+                full_data_context += f"\n--- FONTE ({category}): {f.name} ---\nEstatísticas: {stats}\nAmostra:\n{res.head(30).to_string()}\n"
+                st.write(f"Categoria: **{category}**")
+                st.write(stats)
             else:
-                df_raw = pd.read_csv(f) if f.name.endswith('.csv') else pd.read_excel(f)
-                df, cat = normalize_dataframe(df_raw, f.name)
-                var_analysis = get_variable_analysis(df)
-                
-                # Alimenta o contexto da IA
-                aggregated_intel += f"\n[CATEGORY: {cat} | FILE: {f.name}]\nDetailed Variables: {var_analysis}\n"
-                
-                st.success(f"Category Identified: {cat}")
-                st.write("Variable Summary:", var_analysis)
-                st.dataframe(df.head(5))
+                full_data_context += f"\n--- DOCUMENTO: {f.name} ---\n{res[:3000]}\n"
+                st.success("Texto extraído do documento.")
 
-    if st.button("🚀 Generate Strategic Executive Report"):
-        with st.spinner("AI is thinking independently..."):
+    if st.button("🚀 Gerar Relatório Estratégico"):
+        with st.spinner('A IA está a cruzar todas as fontes de dados...'):
             try:
+                # Prompt flexível para permitir que a IA "pense" por si mesma
                 prompt = f"""
-                You are a Senior Real Estate Investment Strategist.
-                I have processed multiple files and standardized the variables for you. 
-                Below is the Deep Variable Analysis for all provided data:
+                Age como um Consultor de Investimentos Imobiliários de Elite na Flórida.
+                Utiliza os dados padronizados abaixo para criar um relatório estratégico.
                 
-                {aggregated_intel}
+                DADOS PROCESSADOS:
+                {full_data_context}
                 
-                YOUR TASK:
-                1. Think independently: Do not just repeat the numbers. Analyze the "WHY". 
-                2. Status Logic: Compare Sold vs Active inventory to identify market velocity.
-                3. Market Gaps: Is there an oversupply of Land compared to Residential demand? 
-                4. Geographic Alpha: Which Subdivisions offer the best risk/reward based on the data?
-                5. Executive Strategy: Provide 5 high-level professional recommendations in English.
-
-                Format: Use professional headers, bullet points, and a sharp investment tone.
+                OBJETIVO:
+                Executa uma análise de nível "{analysis_mode}". 
+                Cruza informações de portais (Zillow/Redfin) com dados reais da MLS se disponíveis.
+                Identifica discrepâncias de preços, velocidade de vendas (Sold vs Active) e hotspots geográficos.
+                
+                ESTRUTURA DO RELATÓRIO:
+                1. SUMÁRIO EXECUTIVO (The "Why"): O que os dados realmente significam hoje?
+                2. ANÁLISE DE VELOCIDADE E PREÇO: Como está o inventário vs vendas?
+                3. INSIGHTS POR ENDEREÇO/ZONA: Onde está o lucro?
+                4. RECOMENDAÇÕES ESTRATÉGICAS: 5 pontos acionáveis para o investidor.
+                
+                Escreve em Inglês Profissional. Usa Markdown.
                 """
                 
+                model = genai.GenerativeModel('gemini-1.5-flash')
                 response = model.generate_content(prompt)
-                st.markdown("### 📊 Global Market Intelligence Report")
+                st.markdown("---")
+                st.markdown("### 📊 Relatório de Inteligência Gerado")
                 st.write(response.text)
                 st.balloons()
             except Exception as e:
-                st.error(f"AI error: {e}")
-else:
-    st.info("💡 Pro Tip: Upload all files together (MLS listings, Land data, and Rentals) for a comparative study.")
+                st.error(f"Erro na análise: {e}")
