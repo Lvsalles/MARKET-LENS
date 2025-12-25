@@ -6,8 +6,8 @@ import folium
 from streamlit_folium import folium_static
 from sklearn.linear_model import LinearRegression
 
-# 1. SETUP DE INTELIGÊNCIA
-st.set_page_config(page_title="Market Lens Pro", layout="wide")
+# 1. SETUP DE INTELIGÊNCIA (Gemini 1.5 Flash)
+st.set_page_config(page_title="Market Lens Intelligence", layout="wide")
 
 if "GOOGLE_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
@@ -16,38 +16,34 @@ else:
     st.error("🔑 API Key não configurada nos Secrets!")
     st.stop()
 
-# 2. BIBLIOTECA DE PADRONIZAÇÃO (Dicionário de Sinônimos Robusto)
-# Esta biblioteca mapeia os nomes técnicos do MLS para nomes funcionais.
+# 2. BIBLIOTECA DE PADRONIZAÇÃO (Dicionário de Sinónimos)
 SYNONYMS = {
-    'Price': ['Current Price_num', 'Current Price', 'Price', 'List Price', 'Price_clean'],
-    'SqFt': ['Heated Area_num', 'SqFt', 'Living Area', 'Heated Area', 'Lot Size Square Footage_num'],
-    'Beds': ['Beds_num', 'Beds', 'Bedrooms', 'Bed'],
-    'Baths': ['Full Baths_num', 'Full Baths', 'Bathrooms', 'Baths'],
-    'Address': ['Address', 'Full Address', 'Street Address', 'Property Address'],
-    'Zip': ['Zip', 'Zip Code', 'PostalCode', 'Zip_clean'],
-    'Status': ['Status', 'Listing Status', 'Status_clean'],
+    'Price': ['Current Price_num', 'Current Price', 'Price', 'List Price'],
+    'SqFt': ['Heated Area_num', 'SqFt', 'Living Area', 'Lot Size Square Footage_num'],
+    'Beds': ['Beds_num', 'Beds', 'Bedrooms'],
+    'Baths': ['Full Baths_num', 'Full Baths', 'Bathrooms'],
+    'Address': ['Address', 'Full Address', 'Street Address'],
+    'Zip': ['Zip', 'Zip Code', 'PostalCode'],
     'Zoning': ['Zoning', 'Zoning Code', 'Land Use']
 }
 
-def robust_normalize(df):
-    """Resolve o InvalidIndexError e normaliza as colunas de cada arquivo."""
-    # A) REMOVE COLUNAS DUPLICADAS: O coração do erro de índice.
-    # Se o arquivo tem duas colunas "Status", mantemos apenas a primeira.
+def robust_cleaning(df):
+    """Extermina o InvalidIndexError e normaliza os dados."""
+    # LIMPEZA CRÍTICA: Remove colunas duplicadas (mantém apenas a primeira)
     df = df.loc[:, ~df.columns.duplicated()].copy()
     
-    # B) MAPEAMENTO POR SINÔNIMOS:
-    for target_name, synonyms_list in SYNONYMS.items():
-        found = next((c for c in synonyms_list if c in df.columns), None)
+    # Padronização de nomes
+    for target, syns in SYNONYMS.items():
+        found = next((c for c in syns if c in df.columns), None)
         if found:
-            df = df.rename(columns={found: target_name})
+            df = df.rename(columns={found: target})
     
-    # C) GARANTIA DE COLUNAS: Cria a coluna como vazia se não existir.
-    essential_cols = ['Price', 'SqFt', 'Beds', 'Address', 'Zip']
-    for col in essential_cols:
+    # Garantia de variáveis essenciais (evita erros de cálculo)
+    for col in ['Price', 'SqFt', 'Beds', 'Address', 'Zip']:
         if col not in df.columns:
             df[col] = np.nan
             
-    # D) LIMPEZA NUMÉRICA: Converte strings de preço ($250,000) em números reais.
+    # Limpeza de preços e conversão numérica
     if 'Price' in df.columns:
         df['Price'] = pd.to_numeric(df['Price'].astype(str).str.replace(r'[$,]', '', regex=True), errors='coerce')
     if 'SqFt' in df.columns:
@@ -56,7 +52,7 @@ def robust_normalize(df):
     return df
 
 # 3. INTERFACE DA WEBTOOL
-st.title("🏙️ Real Estate Strategic Engine")
+st.title("🏙️ Global Real Estate Strategic Engine")
 st.markdown("---")
 
 files = st.file_uploader("Upload MLS Files (CSV/XLSX)", accept_multiple_files=True)
@@ -65,39 +61,34 @@ if files:
     all_dfs = []
     for f in files:
         try:
-            # Carregamento inicial do arquivo bruto
             df_raw = pd.read_csv(f) if f.name.endswith('.csv') else pd.read_excel(f)
-            
-            # NORMALIZAÇÃO IMEDIATA (Antes de adicionar à lista de junção)
-            df_cleaned = robust_normalize(df_raw)
-            all_dfs.append(df_cleaned)
-            st.sidebar.success(f"✅ {f.name} processado.")
+            # Limpa cada ficheiro ANTES do concat para evitar InvalidIndexError
+            all_dfs.append(robust_cleaning(df_raw))
+            st.sidebar.success(f"✅ {f.name} processado")
         except Exception as e:
-            st.error(f"Erro ao processar {f.name}: {e}")
+            st.error(f"Erro no ficheiro {f.name}: {e}")
 
     if all_dfs:
-        # CONCATENAÇÃO SEGURA: Agora garantimos que as colunas são únicas e nomeadas igual.
-        # O ignore_index=True reconstrói o índice do zero, evitando o erro.
+        # CONCATENAÇÃO SEGURA
         main_df = pd.concat(all_dfs, ignore_index=True)
         
-        tab_map, tab_arbitrage, tab_gemini = st.tabs(["📍 Mapa de Ativos", "📈 Arbitragem & ROI", "🤖 IA Strategic Chat"])
+        tab_map, tab_analytics, tab_gemini = st.tabs(["📍 Mapa de Ativos", "📈 Arbitragem & ROI", "🤖 Consultoria Gemini"])
 
         with tab_map:
             st.subheader("Geolocalização e Contexto de Vizinhança")
             m = folium.Map(location=[27.05, -82.25], zoom_start=11)
             
-            # Plotagem inteligente: apenas se tiver endereço e preço
+            # Plotagem inteligente com link para Google Maps
             plot_df = main_df.dropna(subset=['Address', 'Price']).head(150)
             for _, row in plot_df.iterrows():
-                addr_encoded = str(row['Address']).replace(' ', '+')
-                gmaps_link = f"https://www.google.com/maps/search/?api=1&query={addr_encoded}+FL"
+                addr_url = str(row['Address']).replace(' ', '+')
+                gmaps_link = f"https://www.google.com/maps/search/?api=1&query={addr_url}+FL"
                 
                 popup_html = f"""
                 <div style='width:220px'>
                     <b>{row['Address']}</b><br>
                     Preço: ${row['Price']:,.0f}<br>
-                    SqFt: {row['SqFt']}<br>
-                    <a href='{gmaps_link}' target='_blank'>🔗 Ver no Google Maps</a>
+                    <a href='{gmaps_link}' target='_blank'>🔗 Abrir no Google Maps</a>
                 </div>
                 """
                 folium.Marker(
@@ -107,8 +98,8 @@ if files:
                 ).add_to(m)
             folium_static(m)
 
-        with tab_arbitrage:
-            st.subheader("Modelo de Arbitragem (CMA Automatizado)")
+        with tab_analytics:
+            st.subheader("Análise Preditiva de Arbitragem")
             # Motor de Regressão: Preço baseado em SqFt e Quartos
             model_df = main_df.dropna(subset=['Price', 'SqFt', 'Beds']).copy()
             if len(model_df) > 5:
@@ -118,31 +109,27 @@ if files:
                 main_df['Fair_Value'] = reg.predict(main_df[['SqFt', 'Beds']].fillna(0))
                 main_df['Arbitrage_%'] = ((main_df['Fair_Value'] - main_df['Price']) / main_df['Price']) * 100
                 
-                st.write("### 💎 Top 15 Oportunidades Subvalorizadas")
+                st.write("### 💎 Top Oportunidades Subvalorizadas")
                 st.dataframe(main_df[main_df['Arbitrage_%'] > 5].sort_values(by='Arbitrage_%', ascending=False).head(15))
             else:
-                st.warning("Carregue mais dados (Residencial/Land) para ativar o motor de regressão.")
+                st.warning("Dados insuficientes para análise estatística.")
 
         with tab_gemini:
-            st.subheader("Consultoria Estratégica AI (McKinsey Style)")
-            user_input = st.text_input("Pergunte sobre tendências, zoneamento ou ROI:")
-            if user_input:
-                with st.spinner('A IA está processando o contexto do mercado...'):
-                    # Conexão do motor de dados com o Gemini
-                    stats_summary = main_df.describe().to_string()
+            st.subheader("🤖 Assistente de Investimento (McKinsey Style)")
+            user_query = st.text_input("Ex: Qual o potencial de construir uma Guest House (ADU) nestes terrenos?")
+            
+            if user_query:
+                with st.spinner('A analisar o mercado...'):
+                    # Conectando o motor ao cérebro (Gemini)
+                    summary = main_df.describe().to_string()
                     prompt = f"""
-                    Aja como um analista sênior de investimentos imobiliários.
-                    Dados atuais do mercado (North Port/Venice): {stats_summary}
+                    Dados Reais do Mercado: {summary}
+                    Pergunta do Investidor: {user_query}
                     
-                    Pergunta do Usuário: {user_input}
-                    
-                    Sua resposta deve considerar:
-                    1. Oportunidades de Arbitragem baseadas no preço por SqFt.
-                    2. Tendências de 2025 (Zillow/Redfin).
-                    3. Potencial de valorização e zoneamento (ADUs).
+                    Aja como um analista sénior. Considere zoneamento, preço por SqFt e tendências 2025.
                     """
                     response = model.generate_content(prompt)
                     st.markdown(response.text)
 
 else:
-    st.info("💡 Hub Ativo. Arraste os arquivos auditados para iniciar.")
+    st.info("💡 Aguardando ficheiros para ativar o Command Center.")
