@@ -1,10 +1,8 @@
 streamlit
 pandas
 google-generativeai
-openpyxl
-pypdf
-python-docx
 numpy
 folium
 streamlit-folium
 scikit-learn
+pypdf
