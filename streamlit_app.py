@@ -2,110 +2,134 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 import numpy as np
-from folium import Map, Marker, Icon
+import folium
 from streamlit_folium import folium_static
+from pypdf import PdfReader
+from docx import Document
 from sklearn.neighbors import NearestNeighbors
 
-# 1. Configuração e IA
-st.set_page_config(page_title="AI Realty Command Center", layout="wide")
+# 1. Configuração de Alta Performance
+st.set_page_config(page_title="AI Investor Command Center", layout="wide", initial_sidebar_state="expanded")
+
+# 2. Inicialização da AI
+if "GOOGLE_API_KEY" not in st.secrets:
+    st.error("🔑 API Key em falta nos Secrets do Streamlit.")
+    st.stop()
+
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
-# 2. Biblioteca de Padronização Universal (Synonyms Library)
-MAPPING = {
-    'Price': ['Current Price', 'Price', 'Sold Price', 'List Price', 'Zestimate'],
-    'Status': ['Status', 'LSC List Side', 'Listing Status'],
-    'Zip': ['Zip', 'Zip Code', 'PostalCode'],
+# ---------------------------------------------------------
+# BIBLIOTECA DE PADRONIZAÇÃO UNIVERSAL (REALTOR & INVESTOR)
+# ---------------------------------------------------------
+SYNONYMS = {
+    'Price': ['Current Price', 'Current Price_num', 'Sold Price', 'List Price', 'Zestimate', 'Price'],
+    'Status': ['Status', 'Listing Status', 'LSC List Side', 'Status_clean'],
+    'Zip': ['Zip', 'Zip Code', 'Zip_clean', 'PostalCode'],
     'Address': ['Address', 'Full Address', 'Street Address'],
-    'SqFt': ['Heated Area', 'SqFt', 'Living Area', 'Heated Area_num'],
-    'Beds': ['Beds', 'Bedrooms', 'Beds_num'],
-    'Baths': ['Full Baths', 'Bathrooms', 'Full Baths_num']
+    'SqFt': ['Heated Area', 'Heated Area_num', 'SqFt', 'Living Area'],
+    'Beds': ['Beds', 'Beds_num', 'Bedrooms'],
+    'Baths': ['Full Baths', 'Full Baths_num', 'Bathrooms'],
+    'DOM': ['CDOM', 'ADOM', 'Days to Contract', 'DOM', 'CDOM_num'],
+    'Zoning': ['Zoning', 'Zoning Code', 'Land Use'],
+    'Agent': ['List Agent', 'Listing Agent', 'Agent Name']
 }
 
-def standardize_df(df):
-    for std, syns in MAPPING.items():
+def normalize_investor_data(df):
+    for std, syns in SYNONYMS.items():
         found = next((c for c in df.columns if c in syns), None)
         if found: df = df.rename(columns={found: std})
+    
+    # Limpeza de duplicados e tipos
+    df = df.loc[:, ~df.columns.duplicated(keep='last')]
     if 'Price' in df.columns:
         df['Price'] = pd.to_numeric(df['Price'].astype(str).str.replace(r'[$,]', '', regex=True), errors='coerce')
+    if 'SqFt' in df.columns:
+        df['Price_SqFt'] = df['Price'] / df['SqFt']
     return df
 
-# 3. Módulo de CMA Moderno (Análise Comparativa de Mercado)
-def perform_cma(target_property, pool_df):
-    # Usa Média Ponderada e Algoritmos de Vizinhança
-    pool_df = pool_df[pool_df['Status'].isin(['Sold', 'SLD', 'Closed'])]
-    if len(pool_df) < 3: return "Dados insuficientes de vendas recentes."
-    
-    # Cálculo de Média Ponderada (Peso maior para casas com SqFt e Beds similares)
-    pool_df['diff'] = abs(pool_df['SqFt'] - target_property['SqFt'])
-    pool_df['weight'] = 1 / (pool_df['diff'] + 1)
-    weighted_avg = (pool_df['Price'] * pool_df['weight']).sum() / pool_df['weight'].sum()
-    return round(weighted_avg, 2)
+# ---------------------------------------------------------
+# INTERFACE LATERAL (PAINEL DE CONTROLO)
+# ---------------------------------------------------------
+st.sidebar.title("💎 Investor Hub")
+analysis_mode = st.sidebar.selectbox(
+    "Nível de Análise",
+    ["Estratégia Macro (Cidade/Economia)", "CMA Moderno (Avaliação)", "Arbitragem e Zonas Oportunas", "Auditoria de Agentes & Portais"]
+)
 
-# 4. Interface Lateral
-st.sidebar.title("🏢 Realty Intelligence")
-mode = st.sidebar.selectbox("Módulo", ["City Overview & Economy", "Modern CMA Tool", "Global Trends (Consultancy)"])
+report_depth = st.sidebar.radio("Profundidade do Relatório", ["Executivo", "Técnico Detalhado", "Análise de Risco (Due Diligence)"])
 
-st.title("🏙️ Command Center: North Port & Venice Intelligence")
+# ---------------------------------------------------------
+# MOTOR PRINCIPAL
+# ---------------------------------------------------------
+st.title("🏙️ Ultimate Real Estate Intelligence Hub")
+st.caption(f"Análise Ativa: {analysis_mode} | Fonte: MLS & Global Consultancies")
+st.markdown("---")
 
-files = st.file_uploader("Upload MLS/Land/Portal Files", accept_multiple_files=True)
+uploaded_files = st.file_uploader("Suba os seus ficheiros (MLS, Land, Rentals, Zillow, Docs)", accept_multiple_files=True)
 
-if files:
-    all_dfs = []
-    for f in files:
-        if f.name.endswith('.csv'):
-            df = standardize_df(pd.read_csv(f))
-            all_dfs.append(df)
-    
-    if all_dfs:
-        main_df = pd.concat(all_dfs, ignore_index=True)
+if uploaded_files:
+    master_context = ""
+    dfs = []
+
+    for f in uploaded_files:
+        ext = f.name.split('.')[-1].lower()
+        with st.expander(f"📁 Processando: {f.name}"):
+            try:
+                if ext in ['csv', 'xlsx']:
+                    raw = pd.read_csv(f) if ext == 'csv' else pd.read_excel(f)
+                    df = normalize_investor_data(raw)
+                    dfs.append(df)
+                    st.success("Dados normalizados com sucesso.")
+                elif ext == 'pdf':
+                    text = " ".join([p.extract_text() for p in PdfReader(f).pages[:5]])
+                    master_context += f"\n[DOC: {f.name}]\n{text[:2000]}\n"
+            except Exception as e:
+                st.error(f"Erro: {e}")
+
+    if dfs:
+        main_df = pd.concat(dfs, ignore_index=True)
         
-        # --- MÓDULO 1: CITY OVERVIEW & ECONOMY ---
-        if mode == "City Overview & Economy":
-            st.header("📍 City & County Intelligence")
-            # Aqui a IA cruza informações externas
-            city_query = st.text_input("Informe a Cidade ou Zip Code", "North Port, FL")
-            
-            if st.button("Buscar Overview Completo"):
-                with st.spinner("Cruzando dados demográficos e econômicos..."):
-                    prompt = f"""
-                    Atue como um analista da McKinsey e PWC. Forneça um overview de {city_query}:
-                    1. Identifique o CONDADO e a região metropolitana.
-                    2. POPULAÇÃO: Estimativa atual e taxa de crescimento.
-                    3. ECONOMIA: Principais empregadores, taxa de DESEMPREGO local e renda média.
-                    4. ESCOLAS: Liste as melhores escolas por Zip Code (GreatSchools rating).
-                    5. CRIME: Índice de criminalidade vs média nacional.
-                    6. ZONEAMENTO: Resumo sobre permissão de ADUs e tendências de desenvolvimento.
-                    """
-                    response = genai.GenerativeModel('gemini-1.5-flash').generate_content(prompt)
-                    st.markdown(response.text)
+        # Métrica em Tempo Real
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Preço Médio", f"${main_df['Price'].mean():,.0f}")
+        m2.metric("Média $/SqFt", f"${main_df.get('Price_SqFt', pd.Series([0])).mean():,.2f}")
+        m3.metric("Volume Ativo", len(main_df))
 
-        # --- MÓDULO 2: CMA MODERNO ---
-        elif mode == "Modern CMA Tool":
-            st.header("📊 Modern Comparative Market Analysis")
-            target_addr = st.selectbox("Selecione a Propriedade Alvo", main_df['Address'].unique())
-            target_row = main_df[main_df['Address'] == target_addr].iloc[0]
-            
-            val_est = perform_cma(target_row, main_df)
-            st.metric("Valor Sugerido (Média Ponderada)", f"${val_est:,.2f}")
-            st.caption("A análise considera proximidade de SqFt e similaridade de características.")
+        # --- O BOTAO DE GERAR (Sempre Visível se houver ficheiros) ---
+        st.markdown("---")
+        if st.button("🚀 GERAR RELATÓRIO ESTRATÉGICO FINAL"):
+            with st.spinner('A IA está a cruzar dados da MLS com tendências McKinsey/Zillow...'):
+                try:
+                    # Agregação de inteligência para a IA
+                    stats_data = {
+                        "by_zip": main_df.groupby('Zip')['Price'].mean().to_dict() if 'Zip' in main_df.columns else "N/A",
+                        "hotspots": main_df['Subdivision'].value_counts().head(10).to_dict() if 'Subdivision' in main_df.columns else "N/A",
+                        "zoning": main_df['Zoning'].value_counts().to_dict() if 'Zoning' in main_df.columns else "N/A"
+                    }
 
-        # --- MÓDULO 3: GLOBAL TRENDS ---
-        elif mode == "Global Trends (Consultancy)":
-            st.header("📈 Deep Trend & Pattern Analysis")
-            if st.button("Analisar Padrões Escondidos"):
-                with st.spinner("Buscando tendências Deloitte, Zillow, e Redfin..."):
-                    # Aqui passamos os dados reais para a IA encontrar o "Alfa"
-                    data_summary = main_df.describe().to_string()
                     prompt = f"""
-                    Analise estes dados reais: {data_summary}
+                    Aja como um Estrategista de Real Estate da McKinsey e um Investidor Pro.
+                    Nível de Análise: {analysis_mode}
+                    Dados reais da MLS: {stats_data}
+                    Contexto Extra: {master_context}
+
+                    TAREFA:
+                    1. OVERVIEW DA CIDADE: Identifique o Condado (Sarasota/Charlotte) e métricas de desemprego/população.
+                    2. CMA MODERNO: Determine se os imóveis estão subavaliados usando Média Ponderada.
+                    3. FATORES SOCIAIS: Avalie Escolas, Crime e Tendências (Zillow/Redfin/Deloitte).
+                    4. ZONEAMENTO E ADU: Com base nas leis da Flórida, identifique potencial para Guest Houses.
+                    5. PADRÕES ESCONDIDOS: Cruze preço por SqFt entre diferentes Zipcodes.
                     
-                    Cruze com as tendências atuais da Zillow, Redfin, Deloitte e McKinsey para 2025:
-                    1. PADRÕES ESCONDIDOS: O que os números não dizem à primeira vista?
-                    2. ARBITRAGEM: Onde o preço por SqFt está desalinhado com a infraestrutura local?
-                    3. TENDÊNCIAS: Como o trabalho remoto e a migração para a Flórida afetam este micro-market?
+                    Escreva em Português de Portugal Profissional.
                     """
-                    response = genai.GenerativeModel('gemini-1.5-flash').generate_content(prompt)
-                    st.markdown(response.text)
+                    
+                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    response = model.generate_content(prompt)
+                    st.markdown("### 📊 Relatório de Inteligência Gerado")
+                    st.write(response.text)
+                    st.balloons()
+                except Exception as e:
+                    st.error(f"Erro na AI: {e}")
 
 else:
-    st.info("💡 Por favor, carregue os arquivos da MLS para ativar o cérebro da ferramenta.")
+    st.info("💡 Hub Pronto. Arraste os seus ficheiros para ativar o botão de relatório.")
