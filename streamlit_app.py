@@ -1,138 +1,121 @@
 import streamlit as st
 import pandas as pd
-import google.generativeai as genai
 import numpy as np
-from pypdf import PdfReader
-import io
+import google.generativeai as genai
+from sklearn.linear_model import LinearRegression
+import folium
+from streamlit_folium import folium_static
 
-# 1. Configuração de Página
-st.set_page_config(page_title="AI Strategic Investor Hub", layout="wide")
-
-# 2. Inicialização Segura da IA (Detecção Automática de Modelo)
-if "GOOGLE_API_KEY" not in st.secrets:
-    st.error("🔑 ERRO: Adicione a sua GOOGLE_API_KEY nos Secrets do Streamlit.")
-    st.stop()
-
+# 1. SETUP INICIAL
+st.set_page_config(page_title="AI Predictive Investor", layout="wide")
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
-@st.cache_resource
-def get_working_model():
-    """Tenta carregar o modelo 1.5-flash, com fallback para gemini-pro se houver erro 404."""
-    available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-    # Lista de prioridades
-    options = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro']
-    for opt in options:
-        if opt in available_models:
-            return genai.GenerativeModel(opt), opt
-    return genai.GenerativeModel(available_models[0]), available_models[0]
-
-model, model_name = get_working_model()
-
-# ---------------------------------------------------------
-# BIBLIOTECA DE PADRONIZAÇÃO (INVESTOR SYMBOLS)
-# ---------------------------------------------------------
-SYNONYMS = {
-    'Price': ['Current Price', 'Current Price_num', 'Sold Price', 'List Price', 'Price', 'Zestimate'],
-    'Status': ['Status', 'Listing Status', 'LSC List Side', 'Status_clean'],
-    'Zip': ['Zip', 'Zip Code', 'PostalCode'],
-    'Address': ['Address', 'Full Address', 'Street Address'],
-    'SqFt': ['Heated Area', 'Heated Area_num', 'SqFt', 'Living Area'],
-    'Beds': ['Beds', 'Bedrooms', 'Beds_num'],
-    'Baths': ['Full Baths', 'Bathrooms', 'Full Baths_num'],
-    'Year': ['Year Built', 'Year Built_num'],
-    'DOM': ['CDOM', 'ADOM', 'Days to Contract', 'DOM']
+# 2. BIBLIOTECA DE ZONEAMENTO (ADU VIABILITY)
+# Mapeamento de leis locais de North Port / Venice
+ZONING_ADU_RULES = {
+    'RSF1': 'Low Potential (Strict setbacks)',
+    'RSF2': 'High Potential (ADU allowed with permit)',
+    'RSF3': 'Moderate Potential',
+    'RMH': 'Mobile Home Zone (Check park rules)',
+    'AG': 'High Potential (Acreage allows ADUs)'
 }
 
-def normalize_data(df):
-    # Aplica o mapeamento de nomes
-    for std, syns in SYNONYMS.items():
+# 3. MOTOR DE NORMALIZAÇÃO
+def advanced_normalize(df):
+    mapping = {
+        'Price': ['Current Price', 'Price', 'List Price', 'Sold Price'],
+        'SqFt': ['Heated Area', 'Heated Area_num', 'SqFt'],
+        'Beds': ['Beds', 'Bedrooms', 'Beds_num'],
+        'Baths': ['Full Baths', 'Bathrooms', 'Full Baths_num'],
+        'Zip': ['Zip', 'Zip Code'],
+        'Zoning': ['Zoning', 'Zoning Code']
+    }
+    for std, syns in mapping.items():
         found = next((c for c in syns if c in df.columns), None)
-        if found:
-            df = df.rename(columns={found: std})
+        if found: df = df.rename(columns={found: std})
     
-    # Remove duplicados de colunas
-    df = df.loc[:, ~df.columns.duplicated(keep='last')]
-    
-    # Limpeza de preços e números
+    # Limpeza e conversão
     if 'Price' in df.columns:
         df['Price'] = pd.to_numeric(df['Price'].astype(str).str.replace(r'[$,]', '', regex=True), errors='coerce')
     if 'SqFt' in df.columns:
         df['Price_SqFt'] = df['Price'] / df['SqFt']
     
-    return df
+    return df.dropna(subset=['Price', 'SqFt', 'Beds'])
+
+# 4. MOTOR DE REGRESSÃO (PREVISÃO DE PREÇO JUSTO)
+def find_undervalued_assets(df):
+    if len(df) < 10: return df
+    
+    # Preparar variáveis para o modelo
+    X = df[['SqFt', 'Beds', 'Baths']].fillna(0)
+    y = df['Price']
+    
+    model = LinearRegression()
+    model.fit(X, y)
+    
+    # Prever Preço Justo e calcular Residual (Diferença)
+    df['Fair_Value'] = model.predict(X)
+    df['Arbitrage_Potential'] = df['Fair_Value'] - df['Price']
+    df['Opportunity_Score'] = (df['Arbitrage_Potential'] / df['Price']) * 100
+    
+    return df.sort_values(by='Opportunity_Score', ascending=False)
 
 # ---------------------------------------------------------
-# INTERFACE PRINCIPAL
+# UI TERMINAL
 # ---------------------------------------------------------
-st.sidebar.title("💎 Painel do Estrategista")
-analysis_mode = st.sidebar.selectbox(
-    "Nível de Inteligência",
-    ["Análise de Arbitragem", "CMA Moderno (Média Ponderada)", "Estratégia Macro & ROI"]
-)
-st.sidebar.caption(f"Motor Ativo: `{model_name}`")
+st.title("🏙️ Predictive Investment Terminal")
+st.sidebar.header("🎯 Parâmetros de Filtro")
 
-st.title("🏙️ Global Real Estate Investment Hub")
-st.markdown("---")
-
-# Upload de Ficheiros
-uploaded_files = st.file_uploader("Arraste os arquivos MLS (CSV, XLSX, PDF)", accept_multiple_files=True)
+uploaded_files = st.file_uploader("Upload MLS Data (CSV/XLSX)", accept_multiple_files=True)
 
 if uploaded_files:
-    master_context = ""
-    all_dfs = []
-
+    dfs = []
     for f in uploaded_files:
-        ext = f.name.split('.')[-1].lower()
-        with st.expander(f"📁 Lendo: {f.name}"):
-            try:
-                if ext in ['csv', 'xlsx']:
-                    df = pd.read_csv(f) if ext == 'csv' else pd.read_excel(f)
-                    df = normalize_data(df)
-                    all_dfs.append(df)
-                    st.success("Variáveis mapeadas.")
-                elif ext == 'pdf':
-                    reader = PdfReader(f)
-                    master_context += f"\n[DOCUMENTO: {f.name}]\n" + " ".join([p.extract_text() for p in reader.pages[:5]])
-            except Exception as e:
-                st.error(f"Erro: {e}")
+        df = pd.read_csv(f) if f.name.endswith('.csv') else pd.read_excel(f)
+        dfs.append(advanced_normalize(df))
+    
+    if dfs:
+        main_df = pd.concat(dfs, ignore_index=True)
+        
+        # Filtros Dinâmicos
+        min_beds = st.sidebar.slider("Min Bedrooms", 1, 5, 3)
+        max_price = st.sidebar.number_input("Max Budget", value=500000)
+        
+        filtered_df = main_df[(main_df['Beds'] >= min_beds) & (main_df['Price'] <= max_price)]
+        
+        # Executar Inteligência Preditiva
+        scored_df = find_undervalued_assets(filtered_df)
 
-    if all_dfs:
-        main_df = pd.concat(all_dfs, ignore_index=True)
-        st.write("### 📊 Amostragem dos Dados Normalizados")
-        st.dataframe(main_df.head(10))
+        # SEÇÃO 1: OPORTUNIDADES DE ARBITRAGEM
+        st.subheader("💎 Top Arbitrage Opportunities (Undervalued)")
+        st.dataframe(scored_df[['Address', 'Price', 'Fair_Value', 'Opportunity_Score', 'Zip']].head(10))
+        st.caption("Nota: 'Fair Value' é calculado via Regressão Multivariada baseada nos seus dados.")
 
-        # --- BOTÃO DE RELATÓRIO ---
-        st.markdown("---")
-        if st.button("🚀 GERAR RELATÓRIO ESTRATÉGICO"):
-            with st.spinner('A IA está a processar os dados...'):
-                try:
-                    # Preparar resumo para a IA
-                    stats_summary = main_df.describe().to_string()
-                    zips = main_df['Zip'].value_counts().head(5).to_dict() if 'Zip' in main_df.columns else {}
-                    
-                    prompt = f"""
-                    Você é um Especialista de Investimento Imobiliário da McKinsey.
-                    Modo: {analysis_mode}
-                    
-                    DADOS MLS: {stats_summary}
-                    ZIP CODES HOTSPOTS: {zips}
-                    CONTEXTO EXTRA: {master_context[:2000]}
+        # SEÇÃO 2: VIABILIDADE DE ADU
+        if 'Zoning' in scored_df.columns:
+            st.subheader("🏗️ ADU Feasibility (Construction Potential)")
+            scored_df['ADU_Potential'] = scored_df['Zoning'].map(ZONING_ADU_RULES).fillna('Unknown')
+            adu_hits = scored_df[scored_df['ADU_Potential'].str.contains('High')]
+            st.write(f"Encontradas **{len(adu_hits)}** propriedades com alto potencial de construção extra.")
+            st.dataframe(adu_hits[['Address', 'Zoning', 'ADU_Potential', 'Price']])
 
-                    TAREFA:
-                    1. Analise quartos, banheiros, piscina e SqFt para achar subvalorizados.
-                    2. Compare preços entre diferentes Zip Codes.
-                    3. Integre conhecimentos de Escolas, Crime e Economia local (North Port/Venice).
-                    4. Cite tendências Zillow/Redfin/Deloitte para 2025.
-                    5. Identifique potencial de ADU (Guest Houses) baseando-se no zoneamento.
-
-                    Responda em Português de Portugal com tom executivo.
-                    """
-                    
-                    response = model.generate_content(prompt)
-                    st.markdown("### 📊 Relatório de Inteligência Gerado")
-                    st.write(response.text)
-                    st.balloons()
-                except Exception as e:
-                    st.error(f"Erro na geração: {e}")
-else:
-    st.info("💡 Por favor, carregue os ficheiros para ativar a análise.")
+        # SEÇÃO 3: RELATÓRIO ESTRATÉGICO IA
+        if st.button("🚀 Gerar Due Diligence AI Report"):
+            with st.spinner('AI analisando riscos e viabilidade financeira...'):
+                # Resumo para a IA focar no ROI
+                top_opportunity = scored_df.iloc[0].to_dict() if not scored_df.empty else {}
+                
+                prompt = f"""
+                Você é um consultor de Due Diligence da Deloitte. 
+                Analise esta oportunidade de topo: {top_opportunity}
+                
+                Cruze com:
+                1. Taxas de juros atuais (6-7%) e impacto no ROI.
+                2. Viabilidade de construir uma ADU (Guest House) nesta zona.
+                3. Tendências PWC para o mercado de Sarasota County em 2025.
+                4. Recomendação de "Exit Strategy" (Flip vs Build-to-Rent).
+                """
+                
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                response = model.generate_content(prompt)
+                st.markdown(response.text)
