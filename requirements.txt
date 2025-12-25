@@ -5,3 +5,5 @@ openpyxl
 pypdf
 python-docx
 numpy
+folium
+streamlit-folium
