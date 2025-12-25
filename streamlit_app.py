@@ -2,132 +2,143 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 from pypdf import PdfReader
-import io
+import numpy as np
 
 # 1. Page Configuration
-st.set_page_config(page_title="AI Market Intelligence Analyst", layout="wide")
+st.set_page_config(page_title="AI Market Intelligence Pro", layout="wide")
 
 # 2. API Key Security Check
 if "GOOGLE_API_KEY" not in st.secrets:
-    st.error("🔑 API Key not found. Please add GOOGLE_API_KEY to Streamlit Secrets.")
+    st.error("🔑 API Key missing. Please add GOOGLE_API_KEY to Streamlit Secrets.")
     st.stop()
 
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
-# 3. Data Intelligence Library (Normalization)
-# This handles the different naming conventions across your MLS files
-SYNONYMS = {
+# ---------------------------------------------------------
+# STANDARDIZATION LIBRARY (The System's Brain)
+# ---------------------------------------------------------
+STANDARD_LIBRARY = {
     'columns': {
-        'Current Price': 'Price', 'Current Price_num': 'Price', 'List Price': 'Price',
+        'Current Price': 'Price', 'Current Price_num': 'Price', 'List Price': 'Price', 'Sold Price': 'Price',
         'Legal Subdivision Name': 'Subdivision', 'Subdivision/Condo Name': 'Subdivision',
-        'Heated Area': 'SqFt', 'Heated Area_num': 'SqFt',
-        'CDOM': 'DOM', 'ADOM': 'DOM', 'Days to Contract': 'DOM'
+        'Heated Area': 'SqFt', 'Heated Area_num': 'SqFt', 'Living Area': 'SqFt',
+        'CDOM': 'DOM', 'ADOM': 'DOM', 'Days to Contract': 'DOM', 'Days to Contract_num': 'DOM',
+        'Status_clean': 'Status', 'LSC List Side': 'Status',
+        'Total Acreage_num': 'LotSize', 'Lot Size Square Footage_num': 'LotSize'
     },
-    'status': {
+    'status_values': {
         'ACT': 'Active', 'Active': 'Active', 'A': 'Active',
         'SLD': 'Sold', 'Sold': 'Sold', 'S': 'Sold', 'Closed': 'Sold',
         'PND': 'Pending', 'Pending': 'Pending', 'P': 'Pending', 'Under Contract': 'Pending'
     }
 }
 
-def analyze_dataset(file):
-    name = file.name.lower()
+def process_and_standardize(uploaded_file):
+    name = uploaded_file.name.lower()
     ext = name.split('.')[-1]
     
     if ext == 'pdf':
-        reader = PdfReader(file)
+        reader = PdfReader(uploaded_file)
         return " ".join([p.extract_text() for p in reader.pages[:10]]), "Document"
     
-    # Read Data
-    df = pd.read_csv(file) if ext == 'csv' else pd.read_excel(file)
+    # Read Spreadsheet
+    df = pd.read_csv(uploaded_file) if ext == 'csv' else pd.read_excel(uploaded_file)
     
-    # Normalize Columns and Status
-    df = df.rename(columns={k: v for k, v in SYNONYMS['columns'].items() if k in df.columns})
+    # 1. Rename columns using the library
+    df = df.rename(columns={k: v for k, v in STANDARD_LIBRARY['columns'].items() if k in df.columns})
+    
+    # 2. Handle duplicates (Keep the last one, usually the _num version)
+    df = df.loc[:, ~df.columns.duplicated(keep='last')]
+    
+    # 3. Normalize Status Values
     if 'Status' in df.columns:
-        df['Status'] = df['Status'].map(SYNONYMS['status']).fillna(df['Status'])
+        df['Status'] = df['Status'].map(STANDARD_LIBRARY['status_values']).fillna(df['Status'])
     
-    # Clean Price Column
-    if 'Price' in df.columns:
-        df['Price'] = pd.to_numeric(df['Price'].astype(str).str.replace(r'[$,]', '', regex=True), errors='coerce')
+    # 4. Clean Numeric Columns
+    for col in ['Price', 'SqFt', 'DOM', 'LotSize']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col].astype(str).str.replace(r'[$,]', '', regex=True), errors='coerce')
 
-    # Automatic Categorization
+    # 5. Categorize File
     category = "Residential"
-    if "land" in name or "acreage_num" in df.columns or "Total Acreage" in df.columns:
-        category = "Land"
-    elif "rental" in name or "lease" in str(df.columns).lower() or "rent" in name:
-        category = "Rental"
+    if "land" in name or "lots" in name or 'LotSize' in df.columns: category = "Land"
+    elif "rent" in name or "lease" in name: category = "Rental"
     
     return df, category
 
-# 4. User Interface
-st.title("🤖 Global Market Intelligence Analyst")
-st.subheader("Deep Multi-Source Portfolio Analysis (North Port & Venice)")
+# ---------------------------------------------------------
+# UI INTERFACE
+# ---------------------------------------------------------
+st.title("🤖 AI Real Estate Intelligence Station")
+st.subheader("Data-Driven Analysis for North Port, Venice & Beyond")
 st.markdown("---")
 
-uploaded_files = st.file_uploader("Upload all MLS files (Residential, Land, Rentals)", type=['csv', 'xlsx', 'pdf'], accept_multiple_files=True)
+files = st.file_uploader("Upload MLS files (Residential, Land, Rentals)", type=['csv', 'xlsx', 'pdf'], accept_multiple_files=True)
 
-if uploaded_files:
-    aggregated_stats = ""
-    st.write(f"### 📊 Processing {len(uploaded_files)} Datasets...")
+if files:
+    global_intelligence_data = ""
+    st.write("### 📑 Processing Data Layers...")
     
-    for f in uploaded_files:
-        with st.expander(f"Inspecting: {f.name}"):
-            data, category = analyze_dataset(f)
+    for f in files:
+        with st.expander(f"Analyzing: {f.name}"):
+            data, category = process_and_standardize(f)
             
             if isinstance(data, pd.DataFrame):
-                # We calculate stats for 100% of the data in the file
-                file_report = f"\nFILE: {f.name} | CATEGORY: {category}\n"
+                # Calculate Detailed Stats for 100% of the rows
+                stats_summary = f"\nFILE: {f.name} | CATEGORY: {category}\n"
                 
                 if 'Status' in data.columns:
                     for status in data['Status'].unique():
                         subset = data[data['Status'] == status]
-                        avg_price = subset['Price'].mean() if 'Price' in subset.columns else 0
-                        top_subs = subset['Subdivision'].value_counts().head(5).to_dict() if 'Subdivision' in subset.columns else {}
+                        avg_p = subset['Price'].mean() if 'Price' in subset.columns else 0
+                        top_sub = subset['Subdivision'].value_counts().head(5).to_dict() if 'Subdivision' in subset.columns else "N/A"
                         
-                        summary = f"- Status: {status} | Count: {len(subset)} | Avg Price: ${avg_price:,.2f} | Top Subdivisions: {top_subs}\n"
-                        file_report += summary
+                        stats_summary += f"- Status: {status} | Count: {len(subset)} | Avg Price: ${avg_p:,.2f} | Hotspots: {top_sub}\n"
                     
-                    st.success(f"Categorized as: {category}")
+                    st.success(f"Category: {category}")
                     st.write(data['Status'].value_counts())
                 else:
-                    file_report += "- No status column found.\n"
+                    stats_summary += "- General Summary: " + str(data.describe(include=[np.number]).to_dict()) + "\n"
                 
-                aggregated_stats += file_report
+                global_intelligence_data += stats_summary
+                st.dataframe(df_preview := data.head(5))
             else:
-                aggregated_stats += f"\nFILE: {f.name} (PDF Document):\n{data[:3000]}\n"
-                st.info("PDF Content Captured.")
+                global_intelligence_data += f"\nFILE: {f.name} (PDF Info):\n{data[:3000]}\n"
+                st.info("PDF Content Extracted.")
 
-    # 5. Global Analysis
+    # 6. GLOBAL ANALYSIS (AI POWERED)
     st.markdown("---")
-    if st.button("🚀 Run Comprehensive Market Analysis"):
-        with st.spinner('Generating Executive Report...'):
+    if st.button("🚀 Generate Strategic Intelligence Report"):
+        with st.spinner('The AI is thinking...'):
             try:
-                # Find best available model
-                available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                target_model = 'models/gemini-1.5-flash' if 'models/gemini-1.5-flash' in available else available[0]
-                model = genai.GenerativeModel(target_model)
-                
+                # Prompt that lets the AI think freely
                 prompt = f"""
-                You are a Senior Investment Consultant. Analyze the REAL market data summary below.
-                IMPORTANT: Do NOT use simulated or placeholder data. Use the exact counts and averages provided.
-
-                MASTER DATA SUMMARY:
-                {aggregated_stats}
-
-                REPORT REQUIREMENTS (Fluent English):
-                1. GLOBAL SNAPSHOT: Group ALL files by STATUS (Active vs Sold vs Pending) and report the grand total counts.
-                2. CATEGORY COMPARISON: Compare dynamics between Residential Sales, Land parcels, and Rentals. 
-                3. GEOGRAPHIC HOTSPOTS: Identify the top Subdivisions where most SOLD activity is happening.
-                4. STRATEGIC INVESTOR INSIGHTS: Provide 5 professional, high-level recommendations.
-
-                Format: Use bold headers, professional bullet points, and a formal tone.
+                You are a Master Real Estate Investment Strategist in Florida.
+                I am providing you with a high-level data summary normalized from multiple MLS sources.
+                
+                YOUR DATA SOURCE:
+                {global_intelligence_data}
+                
+                YOUR MISSION:
+                Think critically about these numbers. Don't just list them. 
+                Interpret the relationship between Active inventory and Sold velocity. 
+                Identify if there is an oversupply in specific categories (like Land) or a shortage in others.
+                Look for pricing gaps between Residential Sales and Rental yields.
+                
+                REPORT STRUCTURE (Fluent English):
+                1. THE BOTTOM LINE: A 2-sentence executive summary of the current market state.
+                2. TRANSACTIONAL VELOCITY: Analyze Active vs Sold per category.
+                3. GEOGRAPHIC POWER ZONES: Where is the money moving based on Subdivision hotspots?
+                4. INVESTOR'S EDGE: 5 highly strategic, non-obvious recommendations.
+                
+                Be professional, sharp, and data-driven.
                 """
                 
-                response = model.generate_content(prompt)
-                st.markdown("### 📊 Global Market Intelligence Executive Report")
+                response = genai.GenerativeModel('gemini-1.5-flash').generate_content(prompt)
+                st.markdown("### 📊 AI Strategic Intelligence Report")
                 st.write(response.text)
                 st.balloons()
             except Exception as e:
                 st.error(f"Analysis Failed: {e}")
 else:
-    st.info("💡 Please upload multiple files to start the comparative analysis.")
+    st.info("💡 Pro Tip: Upload all files at once (Cmd+Click) to see the comparative analysis.")
