@@ -6,130 +6,128 @@ import folium
 from streamlit_folium import folium_static
 from pypdf import PdfReader
 from docx import Document
-from sklearn.neighbors import NearestNeighbors
+import io
 
 # 1. Configuração de Alta Performance
-st.set_page_config(page_title="AI Investor Command Center", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Realty Intelligence Hub", layout="wide")
 
-# 2. Inicialização da AI
+# 2. Inicialização Segura da AI
 if "GOOGLE_API_KEY" not in st.secrets:
-    st.error("🔑 API Key em falta nos Secrets do Streamlit.")
+    st.error("🔑 API Key em falta. Adicione-a nos Secrets do Streamlit.")
     st.stop()
 
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
 # ---------------------------------------------------------
-# BIBLIOTECA DE PADRONIZAÇÃO UNIVERSAL (REALTOR & INVESTOR)
+# BIBLIOTECA DE PADRONIZAÇÃO UNIVERSAL (SINÔNIMOS)
 # ---------------------------------------------------------
 SYNONYMS = {
-    'Price': ['Current Price', 'Current Price_num', 'Sold Price', 'List Price', 'Zestimate', 'Price'],
+    'Price': ['Current Price', 'Current Price_num', 'List Price', 'Sold Price', 'Price', 'Rent', 'Zestimate'],
     'Status': ['Status', 'Listing Status', 'LSC List Side', 'Status_clean'],
     'Zip': ['Zip', 'Zip Code', 'Zip_clean', 'PostalCode'],
     'Address': ['Address', 'Full Address', 'Street Address'],
     'SqFt': ['Heated Area', 'Heated Area_num', 'SqFt', 'Living Area'],
-    'Beds': ['Beds', 'Beds_num', 'Bedrooms'],
-    'Baths': ['Full Baths', 'Full Baths_num', 'Bathrooms'],
+    'Beds': ['Beds', 'Bedrooms', 'Beds_num'],
+    'Baths': ['Full Baths', 'Bathrooms', 'Full Baths_num'],
     'DOM': ['CDOM', 'ADOM', 'Days to Contract', 'DOM', 'CDOM_num'],
     'Zoning': ['Zoning', 'Zoning Code', 'Land Use'],
-    'Agent': ['List Agent', 'Listing Agent', 'Agent Name']
+    'Agent': ['List Agent', 'Listing Agent', 'Agent Name', 'List Agent ID'],
+    'Pool': ['Pool', 'Pool Features', 'Private Pool'],
+    'Garage': ['Garage', 'Garage Spaces', 'Carport'],
+    'Financing': ['Sold Terms', 'Terms', 'Financing']
 }
 
-def normalize_investor_data(df):
+STATUS_MAP = {
+    'ACT': 'Active', 'SLD': 'Sold', 'PND': 'Pending', 'Closed': 'Sold', 'Active': 'Active'
+}
+
+def normalize_investor_data(df, filename):
+    name = filename.lower()
+    # Identificação de Categoria
+    cat = "Residential"
+    if "land" in name or "lots" in name or "total acreage_num" in df.columns: cat = "Land"
+    elif "rent" in name or "rental" in name or "lease" in str(df.columns).lower(): cat = "Rental"
+    
+    # Padronização de Colunas
     for std, syns in SYNONYMS.items():
-        found = next((c for c in df.columns if c in syns), None)
+        found = next((c for c in syns if c in df.columns), None)
         if found: df = df.rename(columns={found: std})
     
-    # Limpeza de duplicados e tipos
+    # Manter apenas colunas únicas
     df = df.loc[:, ~df.columns.duplicated(keep='last')]
+    
+    # Conversões Numéricas
     if 'Price' in df.columns:
         df['Price'] = pd.to_numeric(df['Price'].astype(str).str.replace(r'[$,]', '', regex=True), errors='coerce')
     if 'SqFt' in df.columns:
         df['Price_SqFt'] = df['Price'] / df['SqFt']
-    return df
+    if 'Status' in df.columns:
+        df['Status'] = df['Status'].map(STATUS_MAP).fillna(df['Status'])
+        
+    return df, cat
 
 # ---------------------------------------------------------
-# INTERFACE LATERAL (PAINEL DE CONTROLO)
+# INTERFACE SIDEBAR (CONTROLES DE INVESTIDOR)
 # ---------------------------------------------------------
-st.sidebar.title("💎 Investor Hub")
+st.sidebar.title("💎 Terminal de Investimento")
 analysis_mode = st.sidebar.selectbox(
-    "Nível de Análise",
-    ["Estratégia Macro (Cidade/Economia)", "CMA Moderno (Avaliação)", "Arbitragem e Zonas Oportunas", "Auditoria de Agentes & Portais"]
+    "Nível de Inteligência",
+    ["Estratégia Macro & Econômica", "CMA Moderno (Média Ponderada)", "Ranking de Agentes & Performance", "Arbitragem Geográfica"]
 )
 
-report_depth = st.sidebar.radio("Profundidade do Relatório", ["Executivo", "Técnico Detalhado", "Análise de Risco (Due Diligence)"])
+report_target = st.sidebar.radio("Estilo de Relatório", ["Investidor Pro", "Apresentação para Cliente", "Due Diligence"])
 
 # ---------------------------------------------------------
-# MOTOR PRINCIPAL
+# UI PRINCIPAL
 # ---------------------------------------------------------
-st.title("🏙️ Ultimate Real Estate Intelligence Hub")
-st.caption(f"Análise Ativa: {analysis_mode} | Fonte: MLS & Global Consultancies")
+st.title("🏙️ Real Estate Intelligence Command Center")
+st.caption(f"Análise Ativa: {analysis_mode} | County Focus: Sarasota & Charlotte")
 st.markdown("---")
 
-uploaded_files = st.file_uploader("Suba os seus ficheiros (MLS, Land, Rentals, Zillow, Docs)", accept_multiple_files=True)
+uploaded_files = st.file_uploader("Upload MLS, Land, Rental or Research Files", accept_multiple_files=True)
 
 if uploaded_files:
-    master_context = ""
-    dfs = []
+    all_dfs = []
+    text_context = ""
 
     for f in uploaded_files:
         ext = f.name.split('.')[-1].lower()
-        with st.expander(f"📁 Processando: {f.name}"):
+        with st.expander(f"📦 Processando Variáveis: {f.name}"):
             try:
                 if ext in ['csv', 'xlsx']:
                     raw = pd.read_csv(f) if ext == 'csv' else pd.read_excel(f)
-                    df = normalize_investor_data(raw)
-                    dfs.append(df)
-                    st.success("Dados normalizados com sucesso.")
+                    df, category = normalize_investor_data(raw, f.name)
+                    df['Category'] = category
+                    all_dfs.append(df)
+                    st.success(f"Identificado como {category}")
+                    st.write(df.describe(include=[np.number]))
                 elif ext == 'pdf':
-                    text = " ".join([p.extract_text() for p in PdfReader(f).pages[:5]])
-                    master_context += f"\n[DOC: {f.name}]\n{text[:2000]}\n"
+                    text = " ".join([p.extract_text() for p in PdfReader(f).pages[:10]])
+                    text_context += f"\n--- {f.name} ---\n{text}\n"
+                elif ext == 'docx':
+                    doc = Document(f)
+                    text = "\n".join([p.text for p in doc.paragraphs])
+                    text_context += f"\n--- {f.name} ---\n{text}\n"
             except Exception as e:
-                st.error(f"Erro: {e}")
+                st.error(f"Erro no ficheiro {f.name}: {e}")
 
-    if dfs:
-        main_df = pd.concat(dfs, ignore_index=True)
+    if all_dfs:
+        main_df = pd.concat(all_dfs, ignore_index=True)
         
-        # Métrica em Tempo Real
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Preço Médio", f"${main_df['Price'].mean():,.0f}")
-        m2.metric("Média $/SqFt", f"${main_df.get('Price_SqFt', pd.Series([0])).mean():,.2f}")
-        m3.metric("Volume Ativo", len(main_df))
+        # DASHBOARD DE MÉTRICAS (VISÃO GERAL)
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Database Total", f"{len(main_df)} records")
+        if 'Price' in main_df.columns:
+            c2.metric("Preço Médio", f"${main_df['Price'].mean():,.0f}")
+        if 'Price_SqFt' in main_df.columns:
+            c3.metric("Avg $/SqFt", f"${main_df['Price_SqFt'].mean():,.2f}")
+        c4.metric("Zip Codes", main_df['Zip'].nunique() if 'Zip' in main_df.columns else "N/A")
 
-        # --- O BOTAO DE GERAR (Sempre Visível se houver ficheiros) ---
-        st.markdown("---")
-        if st.button("🚀 GERAR RELATÓRIO ESTRATÉGICO FINAL"):
-            with st.spinner('A IA está a cruzar dados da MLS com tendências McKinsey/Zillow...'):
-                try:
-                    # Agregação de inteligência para a IA
-                    stats_data = {
-                        "by_zip": main_df.groupby('Zip')['Price'].mean().to_dict() if 'Zip' in main_df.columns else "N/A",
-                        "hotspots": main_df['Subdivision'].value_counts().head(10).to_dict() if 'Subdivision' in main_df.columns else "N/A",
-                        "zoning": main_df['Zoning'].value_counts().to_dict() if 'Zoning' in main_df.columns else "N/A"
-                    }
-
-                    prompt = f"""
-                    Aja como um Estrategista de Real Estate da McKinsey e um Investidor Pro.
-                    Nível de Análise: {analysis_mode}
-                    Dados reais da MLS: {stats_data}
-                    Contexto Extra: {master_context}
-
-                    TAREFA:
-                    1. OVERVIEW DA CIDADE: Identifique o Condado (Sarasota/Charlotte) e métricas de desemprego/população.
-                    2. CMA MODERNO: Determine se os imóveis estão subavaliados usando Média Ponderada.
-                    3. FATORES SOCIAIS: Avalie Escolas, Crime e Tendências (Zillow/Redfin/Deloitte).
-                    4. ZONEAMENTO E ADU: Com base nas leis da Flórida, identifique potencial para Guest Houses.
-                    5. PADRÕES ESCONDIDOS: Cruze preço por SqFt entre diferentes Zipcodes.
-                    
-                    Escreva em Português de Portugal Profissional.
-                    """
-                    
-                    model = genai.GenerativeModel('gemini-1.5-flash')
-                    response = model.generate_content(prompt)
-                    st.markdown("### 📊 Relatório de Inteligência Gerado")
-                    st.write(response.text)
-                    st.balloons()
-                except Exception as e:
-                    st.error(f"Erro na AI: {e}")
-
-else:
-    st.info("💡 Hub Pronto. Arraste os seus ficheiros para ativar o botão de relatório.")
+        # MAPEAMENTO GEO (ESTILO GOOGLE MAPS)
+        st.subheader("📍 Geospatial Intelligence Heatmap")
+        m = folium.Map(location=[27.05, -82.25], zoom_start=11)
+        for _, row in main_df.dropna(subset=['Address']).head(50).iterrows():
+            color = 'blue' if row['Category'] == 'Residential' else 'green'
+            folium.Marker(
+                [27.05 + np.random.uniform(-0.06, 0.06), -82.25 + np.random.uniform(-0.06, 0.06)],
+                popup=f"Address: {row['Address']}<br
