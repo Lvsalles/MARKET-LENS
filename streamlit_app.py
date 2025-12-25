@@ -4,19 +4,28 @@ import google.generativeai as genai
 import numpy as np
 from pypdf import PdfReader
 
-# 1. Configuração Básica (Sempre visível)
-st.set_page_config(page_title="Investidor Pro Hub", layout="wide")
+# 1. Configuração de Página
+st.set_page_config(page_title="AI Market Intelligence", layout="wide")
 
-# 2. Configuração da IA
-if "GOOGLE_API_KEY" in st.secrets:
-    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-else:
-    st.error("🔑 Configure a sua API KEY nos Secrets do Streamlit!")
+# 2. Inicialização Inteligente da IA (Evita Erro 404)
+if "GOOGLE_API_KEY" not in st.secrets:
+    st.error("🔑 ERRO: Adicione a sua GOOGLE_API_KEY nos Secrets do Streamlit.")
     st.stop()
 
-# ---------------------------------------------------------
-# BIBLIOTECA DE PADRONIZAÇÃO (Dicionário de Sinónimos)
-# ---------------------------------------------------------
+genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+
+def get_available_model():
+    """Deteta automaticamente o melhor modelo disponível para evitar erro 404."""
+    try:
+        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        # Preferência por Flash 1.5, depois Pro, depois o que estiver disponível
+        for m in ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro']:
+            if m in models: return m
+        return models[0]
+    except Exception:
+        return "models/gemini-pro" # Fallback padrão
+
+# 3. Biblioteca de Padronização (Synonyms)
 SYNONYMS = {
     'Price': ['Current Price', 'Current Price_num', 'Sold Price', 'List Price', 'Price'],
     'Status': ['Status', 'Listing Status', 'LSC List Side', 'Status_clean'],
@@ -25,8 +34,7 @@ SYNONYMS = {
     'SqFt': ['Heated Area', 'Heated Area_num', 'SqFt', 'Living Area'],
     'Beds': ['Beds', 'Bedrooms', 'Beds_num'],
     'Baths': ['Full Baths', 'Bathrooms', 'Full Baths_num'],
-    'DOM': ['CDOM', 'ADOM', 'Days to Contract', 'DOM'],
-    'Subdivision': ['Legal Subdivision Name', 'Subdivision/Condo Name']
+    'DOM': ['CDOM', 'ADOM', 'Days to Contract', 'DOM']
 }
 
 def clean_data(df):
@@ -37,19 +45,18 @@ def clean_data(df):
         df['Price'] = pd.to_numeric(df['Price'].astype(str).str.replace(r'[$,]', '', regex=True), errors='coerce')
     return df
 
-# ---------------------------------------------------------
-# INTERFACE PRINCIPAL
-# ---------------------------------------------------------
+# 4. Interface Sidebar
+st.sidebar.title("💎 Painel do Investidor")
+analise_tipo = st.sidebar.selectbox("Foco da Análise", ["ROI & Arbitragem", "CMA Moderno", "Zoneamento & Escolas"])
+
+# 5. Interface Principal
 st.title("🏙️ Sistema de Inteligência Imobiliária")
-st.sidebar.header("Painel de Controlo")
-analise_tipo = st.sidebar.selectbox("Tipo de Relatório", ["Macro Economia", "CMA Moderno", "Zoneamento & ROI"])
+st.markdown("---")
 
-# Upload de Ficheiros
-files = st.file_uploader("Suba os seus ficheiros MLS (CSV, XLSX ou PDF)", accept_multiple_files=True)
+files = st.file_uploader("Suba aqui os seus dados (MLS, Land, Rental ou PDF)", accept_multiple_files=True)
 
-# Memória de dados
+master_context = ""
 all_dfs = []
-contexto_texto = ""
 
 if files:
     for f in files:
@@ -58,53 +65,56 @@ if files:
             if ext in ['csv', 'xlsx']:
                 df = pd.read_csv(f) if ext == 'csv' else pd.read_excel(f)
                 all_dfs.append(clean_data(df))
-                st.sidebar.success(f"✅ {f.name} carregado")
+                st.sidebar.success(f"✅ {f.name} lido")
             elif ext == 'pdf':
                 text = " ".join([p.extract_text() for p in PdfReader(f).pages[:5]])
-                contexto_texto += f"\n[DOCUMENTO: {f.name}]\n{text[:1000]}"
+                master_context += f"\n[DOC: {f.name}]\n{text[:1500]}"
         except Exception as e:
-            st.error(f"Erro ao ler {f.name}: {e}")
+            st.error(f"Erro ao processar {f.name}: {e}")
 
-    # Mostrar Dados se existirem
     if all_dfs:
         main_df = pd.concat(all_dfs, ignore_index=True)
-        st.write("### 📊 Visão Geral dos Dados")
+        st.write("### 📊 Amostragem de Dados")
         st.dataframe(main_df.head(5))
         
-        # Métricas Rápidas
-        c1, c2 = st.columns(2)
-        c1.metric("Total de Registos", len(main_df))
+        # Métricas em tempo real
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Database Total", len(main_df))
         if 'Price' in main_df.columns:
             c2.metric("Preço Médio", f"${main_df['Price'].mean():,.0f}")
+        c3.metric("Zip Codes", main_df['Zip'].nunique() if 'Zip' in main_df.columns else "N/A")
 
     # --- BOTÃO DE RELATÓRIO (POSIÇÃO FIXA) ---
     st.markdown("---")
-    st.subheader("🚀 Gerador de Inteligência")
+    st.subheader("🚀 Gerador de Estratégia")
     
-    if st.button("GERAR RELATÓRIO ESTRATÉGICO"):
-        with st.spinner('A IA está a pensar...'):
+    if st.button("GERAR RELATÓRIO AGORA"):
+        with st.spinner('A IA está a analisar o mercado...'):
             try:
-                # Resumo para a IA
-                resumo = main_df.describe().to_string() if all_dfs else "Apenas documentos de texto."
+                target_model = get_available_model()
+                st.caption(f"Utilizando motor: `{target_model}`")
+                
+                resumo = main_df.describe().to_string() if all_dfs else "Apenas texto."
                 
                 prompt = f"""
-                Age como um Especialista em Investimento Imobiliário. 
-                Análise: {analise_tipo}
-                Dados: {resumo}
-                Extra: {contexto_texto}
+                Você é um Especialista em Investimento Imobiliário da McKinsey.
+                Objetivo: {analise_tipo}
+                Dados MLS: {resumo}
+                Extra: {master_context}
                 
-                Faz uma análise variável por variável (quartos, banheiros, piscina, etc).
-                Cruza com tendências da Zillow, Redfin e McKinsey.
-                Fala sobre Escolas, Crime e Zoneamento (ADU) em North Port/Venice.
-                Dê 5 recomendações de investimento.
+                TAREFA:
+                1. Analise quartos, banheiros, piscina e SqFt.
+                2. Cruze com tendências Zillow/McKinsey.
+                3. Analise Escolas, Crime e Zoneamento em North Port/Venice.
+                4. Liste 5 recomendações com links (placeholders) para o Google Maps.
                 """
                 
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                model = genai.GenerativeModel(target_model)
                 response = model.generate_content(prompt)
-                st.markdown("### 📊 Relatório Final")
+                st.markdown("### 📊 Relatório Estratégico")
                 st.write(response.text)
+                st.balloons()
             except Exception as e:
                 st.error(f"Erro na IA: {e}")
-
 else:
-    st.info("💡 Arraste os ficheiros para aqui para começar.")
+    st.info("💡 Por favor, suba um ficheiro para começar.")
