@@ -1,15 +1,22 @@
-import os
-import re
-import uuid
-from datetime import datetime, timezone
-
 import streamlit as st
-import pandas as pd
-import numpy as np
-from pypdf import PdfReader
-from docx import Document
 
-from db import (
+st.write("Secrets keys loaded:", list(st.secrets.keys()))
+
+if "DATABASE_URL" in st.secrets:
+    url = st.secrets["DATABASE_URL"]
+    # mask password safely
+    masked = url
+    if "://" in masked and "@" in masked:
+        left, right = masked.split("://", 1)
+        creds, host = right.split("@", 1)
+        if ":" in creds:
+            user, _pw = creds.split(":", 1)
+            masked = f"{left}://{user}:*****@{host}"
+    st.write("DATABASE_URL detected:", masked)
+else:
+    st.error("DATABASE_URL is missing from Streamlit secrets!")
+    st.stop()
+
     get_db_conn,
     insert_upload,
     insert_document_text,
