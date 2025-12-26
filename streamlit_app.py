@@ -1,218 +1,376 @@
 # streamlit_app.py
+import os
+import re
+import uuid
+from datetime import datetime
+
 import streamlit as st
 import pandas as pd
+import numpy as np
+from pypdf import PdfReader
+from docx import Document
 
-from db import get_db_conn
-
-st.set_page_config(page_title="MARKET LENS — Dashboard", layout="wide")
-
-st.title("MARKET LENS — Dashboard")
-st.caption("Market analytics with correct methodologies: weighted averages + simple averages + medians.")
+from db import get_db_conn, insert_upload, insert_document_text, bulk_insert_dicts
 
 
-# -------------------------
-# DB Helpers
-# -------------------------
-@st.cache_data(ttl=60)
-def fetch_df(sql: str, params=None) -> pd.DataFrame:
-    conn = get_db_conn()
-    try:
-        df = pd.read_sql_query(sql, conn, params=params)
-        return df
-    finally:
-        conn.close()
+st.set_page_config(page_title="MARKET LENS — Upload Center", layout="wide")
+
+st.title("MARKET LENS — Upload Center")
+st.caption("Upload CSV/XLSX for structured data, and PDF/DOCX for document storage + text extraction.")
 
 
-def metric_card(label: str, value, help_text: str = ""):
-    col = st.container()
-    col.metric(label, value)
-    if help_text:
-        col.caption(help_text)
+# ----------------------------
+# Local storage (ephemeral on Streamlit Cloud)
+# ----------------------------
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
-def fmt_money(x):
-    if x is None or pd.isna(x):
-        return "—"
-    return f"${float(x):,.0f}"
+def save_uploaded_file(uploaded_file) -> str:
+    safe_name = uploaded_file.name.replace("/", "_").replace("\\", "_")
+    stored_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}_{safe_name}")
+    with open(stored_path, "wb") as out:
+        out.write(uploaded_file.getbuffer())
+    return stored_path
 
 
-def fmt_money2(x):
-    if x is None or pd.isna(x):
-        return "—"
-    return f"${float(x):,.2f}"
+def detect_filetype(filename: str) -> str:
+    fn = filename.lower().strip()
+    if fn.endswith(".csv"):
+        return "csv"
+    if fn.endswith(".xlsx") or fn.endswith(".xls"):
+        return "xlsx"
+    if fn.endswith(".pdf"):
+        return "pdf"
+    if fn.endswith(".docx"):
+        return "docx"
+    return "other"
 
 
-def fmt_num(x, digits=0):
-    if x is None or pd.isna(x):
-        return "—"
-    return f"{float(x):,.{digits}f}"
+# ----------------------------
+# Text extraction
+# ----------------------------
+def extract_pdf_text(file_path: str) -> str:
+    reader = PdfReader(file_path)
+    parts = []
+    for page in reader.pages:
+        parts.append(page.extract_text() or "")
+    return "\n".join(parts).strip()
 
 
-# -------------------------
-# Sidebar Navigation
-# -------------------------
-page = st.sidebar.radio(
-    "Navigation",
-    ["Overview", "Residential ZIP Snapshot", "Land ZIP Snapshot"],
-    index=0
+def extract_docx_text(file_path: str) -> str:
+    doc = Document(file_path)
+    parts = [p.text for p in doc.paragraphs if p.text]
+    return "\n".join(parts).strip()
+
+
+# ----------------------------
+# Column normalization
+# ----------------------------
+def norm(s: str) -> str:
+    s = str(s).strip().lower()
+    s = re.sub(r"\s+", "_", s)
+    s = re.sub(r"[^a-z0-9_]", "", s)
+    return s
+
+
+def normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.columns = [norm(c) for c in df.columns]
+    df = df.loc[:, ~df.columns.duplicated()].copy()
+    return df
+
+
+SYNONYMS = {
+    # shared
+    "ml_number": ["ml_number", "mls_number", "mls", "listing_id", "listingnumber", "mlnumber"],
+    "status": ["status", "mlsstatus", "listing_status"],
+    "address": ["address", "full_address", "street_address", "unparsedaddress"],
+    "city": ["city"],
+    "county": ["county", "countyorparish"],
+    "zip": ["zip", "zipcode", "postalcode", "postal_code"],
+
+    # residential
+    "price": ["price", "list_price", "current_price"],
+    "sqft": ["sqft", "living_area", "heated_area", "heated_areanum"],
+    "beds": ["beds", "bedrooms"],
+    "baths": ["baths", "bathrooms", "full_baths", "fullbaths"],
+    "year_built": ["year_built", "yearbuilt"],
+
+    # land
+    "acreage": ["acreage", "acres", "total_acreage", "lot_acres"],
+    "lot_sqft": ["lot_sqft", "lot_size_sqft", "lot_size_square_footage", "lot_size_square_footage_num"],
+    "zoning": ["zoning", "zoning_code", "land_use"],
+
+    # agent
+    "agent_name": ["agent_name", "list_agent", "agent", "agentfullname", "agent_full_name"],
+    "office_name": ["office_name", "list_office_name", "office", "brokerage"],
+    "agent_id": ["agent_id", "list_agent_id", "agentlicense", "license", "list_agent_id"],
+}
+
+
+def apply_synonyms(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    colmap = {}
+    cols = set(df.columns)
+
+    for canonical, candidates in SYNONYMS.items():
+        found = next((c for c in candidates if c in cols), None)
+        if found:
+            colmap[found] = canonical
+
+    if colmap:
+        df = df.rename(columns=colmap)
+
+    return df
+
+
+def detect_dataset_type(df: pd.DataFrame, filename: str) -> str:
+    """
+    IMPORTANT:
+    - Filename-based override for AGENT and LAND (to avoid misclassification).
+    - Otherwise, use column scoring.
+    """
+    fn = filename.lower()
+
+    # Strong filename overrides
+    if "agent" in fn:
+        return "agent"
+    if "land" in fn:
+        return "land"
+
+    cols = set(df.columns)
+
+    # agent scoring
+    agent_score = 0
+    if "agent_name" in cols:
+        agent_score += 3
+    if "agent_id" in cols:
+        agent_score += 2
+    if "office_name" in cols:
+        agent_score += 1
+
+    # land scoring
+    land_score = 0
+    if "acreage" in cols:
+        land_score += 3
+    if "zoning" in cols:
+        land_score += 1
+    if "lot_sqft" in cols:
+        land_score += 1
+
+    # residential scoring
+    res_score = 0
+    if "price" in cols:
+        res_score += 1
+    if "sqft" in cols:
+        res_score += 1
+    if "beds" in cols:
+        res_score += 1
+    if "baths" in cols:
+        res_score += 1
+
+    scores = {"agent": agent_score, "land": land_score, "residential": res_score}
+    best = max(scores, key=scores.get)
+
+    # default fallback
+    return best
+
+
+# ----------------------------
+# Coercions
+# ----------------------------
+def to_num(series):
+    return pd.to_numeric(series.astype(str).str.replace(r"[$,]", "", regex=True), errors="coerce")
+
+
+def ensure_cols(df: pd.DataFrame, cols: list[str], fill_value=None) -> pd.DataFrame:
+    df = df.copy()
+    for c in cols:
+        if c not in df.columns:
+            df[c] = fill_value
+    return df
+
+
+def coerce_residential(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df = ensure_cols(df, ["ml_number", "status", "address", "city", "county", "zip"], None)
+    df = ensure_cols(df, ["price", "sqft", "beds", "baths", "year_built"], np.nan)
+
+    df["price"] = to_num(df["price"])
+    df["sqft"] = to_num(df["sqft"])
+    df["beds"] = to_num(df["beds"])
+    df["baths"] = to_num(df["baths"])
+    df["year_built"] = to_num(df["year_built"])
+
+    return df
+
+
+def coerce_land(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df = ensure_cols(df, ["ml_number", "status", "address", "city", "county", "zip", "zoning"], None)
+    df = ensure_cols(df, ["price", "acreage", "lot_sqft"], np.nan)
+
+    df["price"] = to_num(df["price"])
+    df["acreage"] = to_num(df["acreage"])
+    df["lot_sqft"] = to_num(df["lot_sqft"])
+
+    return df
+
+
+def coerce_agent(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df = ensure_cols(df, ["agent_name", "agent_id", "office_name", "city", "county"], None)
+    return df
+
+
+# ----------------------------
+# UI
+# ----------------------------
+files = st.file_uploader(
+    "Upload files (CSV, XLSX, PDF, DOCX)",
+    type=["csv", "xlsx", "xls", "pdf", "docx"],
+    accept_multiple_files=True,
 )
 
-
-# -------------------------
-# OVERVIEW PAGE
-# -------------------------
-if page == "Overview":
-    st.subheader("Market Overview (Residential)")
-
-    res = fetch_df("select * from public.v_res_market_overview;")
-    if res.empty:
-        st.warning("No residential data found.")
-        st.stop()
-
-    r = res.iloc[0]
-
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        metric_card("Homes", int(r["homes"]), "Total rows in residential_listings.")
-    with c2:
-        metric_card("Avg Price (simple)", fmt_money(r["avg_price_simple"]), "avg(price). Each home weights equally.")
-    with c3:
-        metric_card("Median Price", fmt_money(r["median_price"]), "50th percentile of price.")
-    with c4:
-        metric_card("$/SqFt (weighted)", fmt_money2(r["avg_price_per_sqft_weighted"]), "sum(price)/sum(sqft). Best practice.")
-
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        metric_card("Avg SqFt (simple)", fmt_num(r["avg_sqft_simple"], 0), "avg(sqft).")
-    with c2:
-        metric_card("Median SqFt", fmt_num(r["median_sqft"], 0), "50th percentile of sqft.")
-    with c3:
-        metric_card("Avg Beds (simple)", fmt_num(r["avg_beds_simple"], 2), "avg(beds).")
-    with c4:
-        metric_card("Avg Baths (simple)", fmt_num(r["avg_baths_simple"], 2), "avg(baths).")
-
-    st.divider()
-
-    st.subheader("Market Overview (Land)")
-    land = fetch_df("select * from public.v_land_market_overview;")
-    if land.empty:
-        st.warning("No land data found.")
-        st.stop()
-
-    l = land.iloc[0]
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        metric_card("Lots", int(l["lots"]), "Total rows in land_listings.")
-    with c2:
-        metric_card("Avg Lot Price (simple)", fmt_money(l["avg_price_simple"]), "avg(price).")
-    with c3:
-        metric_card("Median Lot Price", fmt_money(l["median_price"]), "50th percentile of price.")
-    with c4:
-        metric_card("$/Acre (weighted)", fmt_money2(l["avg_price_per_acre_weighted"]), "sum(price)/sum(acreage). Best practice.")
-
-    c1, c2 = st.columns(2)
-    with c1:
-        metric_card("Avg Acreage (simple)", fmt_num(l["avg_acreage_simple"], 2), "avg(acreage).")
+if not files:
+    st.info("Upload files to begin.")
+    st.stop()
 
 
-# -------------------------
-# RESIDENTIAL ZIP SNAPSHOT
-# -------------------------
-elif page == "Residential ZIP Snapshot":
-    st.subheader("Residential ZIP Snapshot")
+if st.button("Process & Save"):
+    report_id = uuid.uuid4()
+    st.write(f"**Report ID:** `{report_id}`")
 
-    zips_df = fetch_df("select distinct zip from public.residential_listings where zip is not null order by zip;")
-    zip_list = zips_df["zip"].dropna().astype(str).tolist()
+    conn = get_db_conn()
 
-    selected = st.multiselect("Filter ZIPs", options=zip_list, default=zip_list[:10] if len(zip_list) >= 10 else zip_list)
+    for f in files:
+        try:
+            ftype = detect_filetype(f.name)
+            stored_path = save_uploaded_file(f)
 
-    if selected:
-        placeholders = ",".join(["%s"] * len(selected))
-        df = fetch_df(
-            f"""
-            select *
-            from public.v_res_zip_snapshot
-            where zip in ({placeholders})
-            order by homes desc;
-            """,
-            params=selected
-        )
-    else:
-        df = fetch_df("select * from public.v_res_zip_snapshot order by homes desc;")
+            # Documents
+            if ftype in ("pdf", "docx"):
+                upload_id = insert_upload(
+                    conn,
+                    report_id=report_id,
+                    filename=f.name,
+                    filetype=ftype,
+                    dataset_type="document",
+                    row_count=0,
+                    col_count=0,
+                    stored_path=stored_path,
+                )
 
-    if df.empty:
-        st.warning("No data to show.")
-        st.stop()
+                text = extract_pdf_text(stored_path) if ftype == "pdf" else extract_docx_text(stored_path)
+                insert_document_text(conn, upload_id=upload_id, text=text)
+                st.success(f"✅ {f.name}: stored document + extracted text ({len(text)} chars).")
+                continue
 
-    # Display
-    df_show = df.copy()
-    df_show["avg_price_simple"] = df_show["avg_price_simple"].apply(fmt_money)
-    df_show["median_price"] = df_show["median_price"].apply(fmt_money)
-    df_show["avg_price_per_sqft_weighted"] = df_show["avg_price_per_sqft_weighted"].apply(fmt_money2)
-    df_show["avg_sqft_simple"] = df_show["avg_sqft_simple"].apply(lambda x: fmt_num(x, 0))
+            # Structured files
+            df_raw = pd.read_csv(f) if ftype == "csv" else pd.read_excel(f)
+            df = normalize_headers(df_raw)
+            df = apply_synonyms(df)
 
-    st.dataframe(
-        df_show.rename(columns={
-            "zip": "ZIP",
-            "homes": "Homes",
-            "avg_price_simple": "Avg Price (simple)",
-            "median_price": "Median Price",
-            "avg_sqft_simple": "Avg SqFt (simple)",
-            "avg_beds_simple": "Avg Beds",
-            "avg_baths_simple": "Avg Baths",
-            "avg_price_per_sqft_weighted": "$/SqFt (weighted)",
-        }),
-        use_container_width=True
-    )
+            dtype = detect_dataset_type(df, f.name)
 
-    st.caption("Note: $/SqFt uses sum(price)/sum(sqft) to avoid distortion from small homes dominating the average.")
+            upload_id = insert_upload(
+                conn,
+                report_id=report_id,
+                filename=f.name,
+                filetype=ftype,
+                dataset_type=dtype,
+                row_count=int(df.shape[0]),
+                col_count=int(df.shape[1]),
+                stored_path=stored_path,
+            )
 
+            now = datetime.utcnow()
 
-# -------------------------
-# LAND ZIP SNAPSHOT
-# -------------------------
-else:
-    st.subheader("Land ZIP Snapshot")
+            if dtype == "residential":
+                df = coerce_residential(df)
+                df["upload_id"] = upload_id
+                df["report_id"] = str(report_id)
+                df["created_at"] = now
 
-    zips_df = fetch_df("select distinct zip from public.land_listings where zip is not null order by zip;")
-    zip_list = zips_df["zip"].dropna().astype(str).tolist()
+                allowed_cols = [
+                    "report_id",
+                    "upload_id",
+                    "ml_number",
+                    "status",
+                    "address",
+                    "city",
+                    "county",
+                    "zip",
+                    "price",
+                    "sqft",
+                    "beds",
+                    "baths",
+                    "year_built",
+                    "created_at",
+                ]
 
-    selected = st.multiselect("Filter ZIPs", options=zip_list, default=zip_list[:10] if len(zip_list) >= 10 else zip_list)
+                rows = df[allowed_cols].to_dict(orient="records")
+                inserted = bulk_insert_dicts(conn, table="residential_listings", rows=rows, allowed_cols=allowed_cols)
+                st.success(f"✅ {f.name}: detected RESIDENTIAL → inserted {inserted} rows.")
+                continue
 
-    if selected:
-        placeholders = ",".join(["%s"] * len(selected))
-        df = fetch_df(
-            f"""
-            select *
-            from public.v_land_zip_snapshot
-            where zip in ({placeholders})
-            order by lots desc;
-            """,
-            params=selected
-        )
-    else:
-        df = fetch_df("select * from public.v_land_zip_snapshot order by lots desc;")
+            if dtype == "land":
+                df = coerce_land(df)
+                df["upload_id"] = upload_id
+                df["report_id"] = str(report_id)
+                df["created_at"] = now
 
-    if df.empty:
-        st.warning("No data to show.")
-        st.stop()
+                allowed_cols = [
+                    "report_id",
+                    "upload_id",
+                    "ml_number",
+                    "status",
+                    "address",
+                    "city",
+                    "county",
+                    "zip",
+                    "price",
+                    "acreage",
+                    "lot_sqft",
+                    "zoning",
+                    "created_at",
+                ]
 
-    df_show = df.copy()
-    df_show["avg_price_simple"] = df_show["avg_price_simple"].apply(fmt_money)
-    df_show["median_price"] = df_show["median_price"].apply(fmt_money)
-    df_show["avg_price_per_acre_weighted"] = df_show["avg_price_per_acre_weighted"].apply(fmt_money2)
-    df_show["avg_acreage_simple"] = df_show["avg_acreage_simple"].apply(lambda x: fmt_num(x, 2))
+                df = ensure_cols(df, allowed_cols, None)
+                rows = df[allowed_cols].to_dict(orient="records")
+                inserted = bulk_insert_dicts(conn, table="land_listings", rows=rows, allowed_cols=allowed_cols)
+                st.success(f"✅ {f.name}: detected LAND → inserted {inserted} rows.")
+                continue
 
-    st.dataframe(
-        df_show.rename(columns={
-            "zip": "ZIP",
-            "lots": "Lots",
-            "avg_price_simple": "Avg Price (simple)",
-            "median_price": "Median Price",
-            "avg_acreage_simple": "Avg Acreage (simple)",
-            "avg_price_per_acre_weighted": "$/Acre (weighted)",
-        }),
-        use_container_width=True
-    )
+            if dtype == "agent":
+                df = coerce_agent(df)
+                df["upload_id"] = upload_id
+                df["report_id"] = str(report_id)
+                df["created_at"] = now
 
-    st.caption("Note: $/Acre uses sum(price)/sum(acreage).")
+                allowed_cols = [
+                    "report_id",
+                    "upload_id",
+                    "agent_name",
+                    "agent_id",
+                    "office_name",
+                    "city",
+                    "county",
+                    "created_at",
+                ]
+
+                df = ensure_cols(df, allowed_cols, None)
+                rows = df[allowed_cols].to_dict(orient="records")
+                inserted = bulk_insert_dicts(conn, table="agent_records", rows=rows, allowed_cols=allowed_cols)
+                st.success(f"✅ {f.name}: detected AGENT → inserted {inserted} rows.")
+                continue
+
+            st.warning(f"⚠️ {f.name}: dataset detected as '{dtype}', upload recorded only (upload_id={upload_id}).")
+
+        except Exception as e:
+            conn.rollback()
+            st.error(f"❌ {f.name}: {e}")
+
+    conn.close()
+    st.success("Done.")
