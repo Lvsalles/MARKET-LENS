@@ -1,39 +1,54 @@
 # streamlit_app.py
 import os
-import re
 import uuid
+import re
 from datetime import datetime
 
 import streamlit as st
 import pandas as pd
 import numpy as np
+
+from db import (
+    get_db_conn,
+    insert_upload,
+    insert_document_text,
+    bulk_insert_dicts,
+)
+
 from pypdf import PdfReader
 from docx import Document
 
-from db import get_db_conn, insert_upload, insert_document_text, bulk_insert_dicts
-
-
-st.set_page_config(page_title="MARKET LENS — Upload Center", layout="wide")
+# ===============================
+# PAGE CONFIG
+# ===============================
+st.set_page_config(
+    page_title="MARKET LENS — Upload Center",
+    layout="wide"
+)
 
 st.title("MARKET LENS — Upload Center")
-st.caption("Upload CSV/XLSX for structured data, and PDF/DOCX for document storage + text extraction.")
+st.caption(
+    "Upload CSV/XLSX for structured data, and PDF/DOCX for document storage + text extraction."
+)
 
-
-# ----------------------------
-# Local storage (ephemeral on Streamlit Cloud)
-# ----------------------------
+# ===============================
+# STORAGE (LOCAL)
+# ===============================
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-
 def save_uploaded_file(uploaded_file) -> str:
     safe_name = uploaded_file.name.replace("/", "_").replace("\\", "_")
-    stored_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}_{safe_name}")
+    stored_path = os.path.join(
+        UPLOAD_DIR, f"{uuid.uuid4()}_{safe_name}"
+    )
     with open(stored_path, "wb") as out:
         out.write(uploaded_file.getbuffer())
     return stored_path
 
-
+# ===============================
+# FILE TYPE
+# ===============================
 def detect_filetype(filename: str) -> str:
     fn = filename.lower().strip()
     if fn.endswith(".csv"):
@@ -46,327 +61,226 @@ def detect_filetype(filename: str) -> str:
         return "docx"
     return "other"
 
+# ===============================
+# TEXT EXTRACTION
+# ===============================
+def extract_pdf_text(path: str) -> str:
+    reader = PdfReader(path)
+    return "\n".join(
+        page.extract_text() or "" for page in reader.pages
+    ).strip()
 
-# ----------------------------
-# Text extraction
-# ----------------------------
-def extract_pdf_text(file_path: str) -> str:
-    reader = PdfReader(file_path)
-    parts = []
-    for page in reader.pages:
-        parts.append(page.extract_text() or "")
-    return "\n".join(parts).strip()
+def extract_docx_text(path: str) -> str:
+    doc = Document(path)
+    return "\n".join(p.text for p in doc.paragraphs if p.text).strip()
 
-
-def extract_docx_text(file_path: str) -> str:
-    doc = Document(file_path)
-    parts = [p.text for p in doc.paragraphs if p.text]
-    return "\n".join(parts).strip()
-
-
-# ----------------------------
-# Column normalization
-# ----------------------------
-def norm(s: str) -> str:
-    s = str(s).strip().lower()
-    s = re.sub(r"\s+", "_", s)
-    s = re.sub(r"[^a-z0-9_]", "", s)
-    return s
-
+# ===============================
+# HEADER NORMALIZATION
+# ===============================
+def norm(col: str) -> str:
+    col = str(col).strip().lower()
+    col = re.sub(r"\s+", "_", col)
+    col = re.sub(r"[^a-z0-9_]", "", col)
+    return col
 
 def normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [norm(c) for c in df.columns]
-    df = df.loc[:, ~df.columns.duplicated()].copy()
+    df = df.loc[:, ~df.columns.duplicated()]
     return df
 
+# ===============================
+# 🔥 CAMADA 2 — BIBLIOTECA SEMÂNTICA
+# ===============================
+SEMANTIC_DICTIONARY = {
+    # Identificadores
+    "ml_number": ["ml_number", "mls_number", "listing_id"],
+    "status": ["status", "mlsstatus"],
 
-SYNONYMS = {
-    # shared
-    "ml_number": ["ml_number", "mls_number", "mls", "listing_id", "listingnumber", "mlnumber"],
-    "status": ["status", "mlsstatus", "listing_status"],
-    "address": ["address", "full_address", "street_address", "unparsedaddress"],
+    # Localização
+    "address": ["address", "street_address", "full_address"],
     "city": ["city"],
     "county": ["county", "countyorparish"],
-    "zip": ["zip", "zipcode", "postalcode", "postal_code"],
+    "zip": ["zip", "zipcode", "postal_code"],
 
-    # residential
-    "price": ["price", "list_price", "current_price"],
-    "sqft": ["sqft", "living_area", "heated_area", "heated_areanum"],
+    # Valores
+    "price": ["price", "list_price", "close_price"],
+    "sqft": ["sqft", "living_area", "heated_area"],
     "beds": ["beds", "bedrooms"],
-    "baths": ["baths", "bathrooms", "full_baths", "fullbaths"],
+    "baths": ["baths", "bathrooms"],
     "year_built": ["year_built", "yearbuilt"],
 
-    # land
-    "acreage": ["acreage", "acres", "total_acreage", "lot_acres"],
-    "lot_sqft": ["lot_sqft", "lot_size_sqft", "lot_size_square_footage", "lot_size_square_footage_num"],
-    "zoning": ["zoning", "zoning_code", "land_use"],
+    # Land
+    "acreage": ["acreage", "acres", "lot_acres"],
+    "lot_sqft": ["lot_sqft", "lot_size_sqft"],
+    "zoning": ["zoning", "land_use"],
 
-    # agent
-    "agent_name": ["agent_name", "list_agent", "agent", "agentfullname", "agent_full_name"],
-    "office_name": ["office_name", "list_office_name", "office", "brokerage"],
-    "agent_id": ["agent_id", "list_agent_id", "agentlicense", "license", "list_agent_id"],
+    # Agent / Office
+    "agent_key": ["agent_id", "list_agent_id", "license"],
+    "agent_name": ["agent", "agent_name", "list_agent"],
+    "office_key": ["office_id", "list_office_id"],
+    "office_name": ["office", "list_office", "brokerage"],
 }
 
-
-def apply_synonyms(df: pd.DataFrame) -> pd.DataFrame:
+def apply_semantic_dictionary(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    colmap = {}
-    cols = set(df.columns)
+    cols = {c.lower(): c for c in df.columns}
+    rename_map = {}
 
-    for canonical, candidates in SYNONYMS.items():
-        found = next((c for c in candidates if c in cols), None)
-        if found:
-            colmap[found] = canonical
+    for canonical, aliases in SEMANTIC_DICTIONARY.items():
+        for a in aliases:
+            if a in cols:
+                rename_map[cols[a]] = canonical
+                break
 
-    if colmap:
-        df = df.rename(columns=colmap)
+    return df.rename(columns=rename_map)
 
-    return df
-
-
+# ===============================
+# DATASET DETECTION
+# ===============================
 def detect_dataset_type(df: pd.DataFrame, filename: str) -> str:
-    """
-    IMPORTANT:
-    - Filename-based override for AGENT and LAND (to avoid misclassification).
-    - Otherwise, use column scoring.
-    """
-    fn = filename.lower()
-
-    # Strong filename overrides
-    if "agent" in fn:
-        return "agent"
-    if "land" in fn:
-        return "land"
-
     cols = set(df.columns)
+    name = filename.lower()
 
-    # agent scoring
-    agent_score = 0
-    if "agent_name" in cols:
-        agent_score += 3
-    if "agent_id" in cols:
-        agent_score += 2
-    if "office_name" in cols:
-        agent_score += 1
+    if "agent" in name or "agent_name" in cols:
+        return "agent"
+    if "acreage" in cols or "land" in name:
+        return "land"
+    return "residential"
 
-    # land scoring
-    land_score = 0
-    if "acreage" in cols:
-        land_score += 3
-    if "zoning" in cols:
-        land_score += 1
-    if "lot_sqft" in cols:
-        land_score += 1
-
-    # residential scoring
-    res_score = 0
-    if "price" in cols:
-        res_score += 1
-    if "sqft" in cols:
-        res_score += 1
-    if "beds" in cols:
-        res_score += 1
-    if "baths" in cols:
-        res_score += 1
-
-    scores = {"agent": agent_score, "land": land_score, "residential": res_score}
-    best = max(scores, key=scores.get)
-
-    # default fallback
-    return best
-
-
-# ----------------------------
-# Coercions
-# ----------------------------
+# ===============================
+# COERCIONS
+# ===============================
 def to_num(series):
-    return pd.to_numeric(series.astype(str).str.replace(r"[$,]", "", regex=True), errors="coerce")
+    return pd.to_numeric(
+        series.astype(str).str.replace(r"[$,]", "", regex=True),
+        errors="coerce"
+    )
 
-
-def ensure_cols(df: pd.DataFrame, cols: list[str], fill_value=None) -> pd.DataFrame:
+def coerce_residential(df):
     df = df.copy()
-    for c in cols:
-        if c not in df.columns:
-            df[c] = fill_value
+    for c in ["price", "sqft", "beds", "baths", "year_built"]:
+        if c in df.columns:
+            df[c] = to_num(df[c])
     return df
 
-
-def coerce_residential(df: pd.DataFrame) -> pd.DataFrame:
+def coerce_land(df):
     df = df.copy()
-    df = ensure_cols(df, ["ml_number", "status", "address", "city", "county", "zip"], None)
-    df = ensure_cols(df, ["price", "sqft", "beds", "baths", "year_built"], np.nan)
-
-    df["price"] = to_num(df["price"])
-    df["sqft"] = to_num(df["sqft"])
-    df["beds"] = to_num(df["beds"])
-    df["baths"] = to_num(df["baths"])
-    df["year_built"] = to_num(df["year_built"])
-
+    for c in ["price", "acreage", "lot_sqft"]:
+        if c in df.columns:
+            df[c] = to_num(df[c])
     return df
 
-
-def coerce_land(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    df = ensure_cols(df, ["ml_number", "status", "address", "city", "county", "zip", "zoning"], None)
-    df = ensure_cols(df, ["price", "acreage", "lot_sqft"], np.nan)
-
-    df["price"] = to_num(df["price"])
-    df["acreage"] = to_num(df["acreage"])
-    df["lot_sqft"] = to_num(df["lot_sqft"])
-
-    return df
-
-
-def coerce_agent(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    df = ensure_cols(df, ["agent_name", "agent_id", "office_name", "city", "county"], None)
-    return df
-
-
-# ----------------------------
+# ===============================
 # UI
-# ----------------------------
+# ===============================
 files = st.file_uploader(
     "Upload files (CSV, XLSX, PDF, DOCX)",
     type=["csv", "xlsx", "xls", "pdf", "docx"],
-    accept_multiple_files=True,
+    accept_multiple_files=True
 )
 
 if not files:
     st.info("Upload files to begin.")
     st.stop()
 
-
 if st.button("Process & Save"):
-    report_id = uuid.uuid4()
-    st.write(f"**Report ID:** `{report_id}`")
-
     conn = get_db_conn()
+    report_id = str(uuid.uuid4())
+    st.write(f"**Report ID:** `{report_id}`")
 
     for f in files:
         try:
             ftype = detect_filetype(f.name)
             stored_path = save_uploaded_file(f)
 
-            # Documents
+            # ===============================
+            # DOCUMENTS
+            # ===============================
             if ftype in ("pdf", "docx"):
                 upload_id = insert_upload(
                     conn,
-                    report_id=report_id,
                     filename=f.name,
                     filetype=ftype,
                     dataset_type="document",
                     row_count=0,
                     col_count=0,
                     stored_path=stored_path,
+                    report_id=report_id
                 )
 
-                text = extract_pdf_text(stored_path) if ftype == "pdf" else extract_docx_text(stored_path)
-                insert_document_text(conn, upload_id=upload_id, text=text)
-                st.success(f"✅ {f.name}: stored document + extracted text ({len(text)} chars).")
+                text = (
+                    extract_pdf_text(stored_path)
+                    if ftype == "pdf"
+                    else extract_docx_text(stored_path)
+                )
+
+                insert_document_text(conn, upload_id, text)
+                st.success(f"✅ {f.name}: document stored")
                 continue
 
-            # Structured files
-            df_raw = pd.read_csv(f) if ftype == "csv" else pd.read_excel(f)
+            # ===============================
+            # STRUCTURED FILES
+            # ===============================
+            df_raw = (
+                pd.read_csv(f)
+                if ftype == "csv"
+                else pd.read_excel(f)
+            )
+
             df = normalize_headers(df_raw)
-            df = apply_synonyms(df)
+            df = apply_semantic_dictionary(df)
 
             dtype = detect_dataset_type(df, f.name)
 
             upload_id = insert_upload(
                 conn,
-                report_id=report_id,
                 filename=f.name,
                 filetype=ftype,
                 dataset_type=dtype,
-                row_count=int(df.shape[0]),
-                col_count=int(df.shape[1]),
+                row_count=len(df),
+                col_count=len(df.columns),
                 stored_path=stored_path,
+                report_id=report_id
             )
 
-            now = datetime.utcnow()
+            df["upload_id"] = upload_id
+            df["created_at"] = datetime.utcnow()
 
             if dtype == "residential":
                 df = coerce_residential(df)
-                df["upload_id"] = upload_id
-                df["report_id"] = str(report_id)
-                df["created_at"] = now
+                inserted = bulk_insert_dicts(
+                    conn,
+                    "residential_listings",
+                    df.to_dict(orient="records"),
+                    df.columns.tolist()
+                )
+                st.success(
+                    f"✅ {f.name}: detected RESIDENTIAL → inserted {inserted} rows."
+                )
 
-                allowed_cols = [
-                    "report_id",
-                    "upload_id",
-                    "ml_number",
-                    "status",
-                    "address",
-                    "city",
-                    "county",
-                    "zip",
-                    "price",
-                    "sqft",
-                    "beds",
-                    "baths",
-                    "year_built",
-                    "created_at",
-                ]
-
-                rows = df[allowed_cols].to_dict(orient="records")
-                inserted = bulk_insert_dicts(conn, table="residential_listings", rows=rows, allowed_cols=allowed_cols)
-                st.success(f"✅ {f.name}: detected RESIDENTIAL → inserted {inserted} rows.")
-                continue
-
-            if dtype == "land":
+            elif dtype == "land":
                 df = coerce_land(df)
-                df["upload_id"] = upload_id
-                df["report_id"] = str(report_id)
-                df["created_at"] = now
+                inserted = bulk_insert_dicts(
+                    conn,
+                    "land_listings",
+                    df.to_dict(orient="records"),
+                    df.columns.tolist()
+                )
+                st.success(
+                    f"✅ {f.name}: detected LAND → inserted {inserted} rows."
+                )
 
-                allowed_cols = [
-                    "report_id",
-                    "upload_id",
-                    "ml_number",
-                    "status",
-                    "address",
-                    "city",
-                    "county",
-                    "zip",
-                    "price",
-                    "acreage",
-                    "lot_sqft",
-                    "zoning",
-                    "created_at",
-                ]
-
-                df = ensure_cols(df, allowed_cols, None)
-                rows = df[allowed_cols].to_dict(orient="records")
-                inserted = bulk_insert_dicts(conn, table="land_listings", rows=rows, allowed_cols=allowed_cols)
-                st.success(f"✅ {f.name}: detected LAND → inserted {inserted} rows.")
-                continue
-
-            if dtype == "agent":
-                df = coerce_agent(df)
-                df["upload_id"] = upload_id
-                df["report_id"] = str(report_id)
-                df["created_at"] = now
-
-                allowed_cols = [
-                    "report_id",
-                    "upload_id",
-                    "agent_name",
-                    "agent_id",
-                    "office_name",
-                    "city",
-                    "county",
-                    "created_at",
-                ]
-
-                df = ensure_cols(df, allowed_cols, None)
-                rows = df[allowed_cols].to_dict(orient="records")
-                inserted = bulk_insert_dicts(conn, table="agent_records", rows=rows, allowed_cols=allowed_cols)
-                st.success(f"✅ {f.name}: detected AGENT → inserted {inserted} rows.")
-                continue
-
-            st.warning(f"⚠️ {f.name}: dataset detected as '{dtype}', upload recorded only (upload_id={upload_id}).")
+            elif dtype == "agent":
+                inserted = bulk_insert_dicts(
+                    conn,
+                    "agent_records",
+                    df.to_dict(orient="records"),
+                    df.columns.tolist()
+                )
+                st.success(
+                    f"✅ {f.name}: detected AGENT → inserted {inserted} rows."
+                )
 
         except Exception as e:
             conn.rollback()
