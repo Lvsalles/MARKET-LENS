@@ -5,7 +5,15 @@ from psycopg2.extras import execute_values
 def get_db_conn():
     return psycopg2.connect(st.secrets["DATABASE_URL"], sslmode="require")
 
-def insert_upload(conn, filename: str, filetype: str, dataset_type: str, row_count: int, col_count: int, stored_path: str):
+def insert_upload(
+    conn,
+    filename: str,
+    filetype: str,
+    dataset_type: str,
+    row_count: int,
+    col_count: int,
+    stored_path: str
+):
     with conn.cursor() as cur:
         cur.execute(
             """
