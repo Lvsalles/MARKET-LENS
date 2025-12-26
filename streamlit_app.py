@@ -1,7 +1,9 @@
+import os
+from datetime import datetime
+
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime
 from pypdf import PdfReader
 from docx import Document
 
@@ -13,7 +15,43 @@ st.title("MARKET LENS — Upload Center")
 st.caption("Upload CSV/XLSX for structured data, and PDF/DOCX for document storage + text extraction.")
 
 # ----------------------------
-# Synonyms Library (Residential starter)
+# 0) Local storage folder
+# ----------------------------
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+def save_uploaded_file(uploaded_file) -> str:
+    """
+    Saves the uploaded file to local disk and returns stored_path.
+    Streamlit Cloud has an ephemeral filesystem, but this is OK for tracking + debugging.
+    Next step: replace this with Supabase Storage / S3.
+    """
+    safe_name = uploaded_file.name.replace("/", "_").replace("\\", "_")
+    stored_path = os.path.join(UPLOAD_DIR, f"{int(datetime.utcnow().timestamp())}_{safe_name}")
+    with open(stored_path, "wb") as out:
+        out.write(uploaded_file.getbuffer())
+    return stored_path
+
+def filetype(filename: str) -> str:
+    fn = filename.lower()
+    if fn.endswith(".csv"): return "csv"
+    if fn.endswith(".xlsx") or fn.endswith(".xls"): return "xlsx"
+    if fn.endswith(".pdf"): return "pdf"
+    if fn.endswith(".docx"): return "docx"
+    return "other"
+
+def guess_dataset_type(filename: str) -> str:
+    fn = filename.lower()
+    if fn.endswith(".pdf") or fn.endswith(".docx"):
+        return "document"
+    if "land" in fn:
+        return "land"
+    if "agent" in fn:
+        return "agent"
+    return "residential"
+
+# ----------------------------
+# 1) Synonyms Library (starter)
 # ----------------------------
 SYNONYMS = {
     "ml_number": ["ML Number", "MLS#", "MLS Number", "Listing ID", "ListingNumber", "ml_number"],
@@ -31,15 +69,12 @@ SYNONYMS = {
 
 REQUIRED_RESIDENTIAL = ["ml_number", "status", "address", "city", "county", "zip", "price", "sqft", "beds", "baths", "year_built"]
 
-# ----------------------------
-# Cleaning + Standardizing
-# ----------------------------
-def dedupe_columns(df: pd.DataFrame) -> pd.DataFrame:
-    return df.loc[:, ~df.columns.duplicated()].copy()
-
 def normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = [str(c).strip() for c in df.columns]
     return df
+
+def dedupe_columns(df: pd.DataFrame) -> pd.DataFrame:
+    return df.loc[:, ~df.columns.duplicated()].copy()
 
 def apply_synonyms(df: pd.DataFrame) -> pd.DataFrame:
     colmap = {}
@@ -74,46 +109,25 @@ def robust_prepare(df: pd.DataFrame) -> pd.DataFrame:
     df = apply_synonyms(df)
     return df
 
-# ----------------------------
-# File Readers
-# ----------------------------
 def read_table_file(uploaded_file) -> pd.DataFrame:
     name = uploaded_file.name.lower()
     if name.endswith(".csv"):
         return pd.read_csv(uploaded_file)
     if name.endswith(".xlsx") or name.endswith(".xls"):
         return pd.read_excel(uploaded_file)
-    raise ValueError("Not a table file.")
+    raise ValueError("Unsupported table file. Use CSV/XLSX.")
 
-def extract_pdf_text(uploaded_file) -> str:
-    reader = PdfReader(uploaded_file)
+def extract_pdf_text(file_path: str) -> str:
+    reader = PdfReader(file_path)
     parts = []
     for page in reader.pages:
         parts.append(page.extract_text() or "")
     return "\n".join(parts).strip()
 
-def extract_docx_text(uploaded_file) -> str:
-    doc = Document(uploaded_file)
+def extract_docx_text(file_path: str) -> str:
+    doc = Document(file_path)
     parts = [p.text for p in doc.paragraphs if p.text]
     return "\n".join(parts).strip()
-
-def guess_dataset_type(filename: str) -> str:
-    fn = filename.lower()
-    if "land" in fn:
-        return "land"
-    if "agent" in fn:
-        return "agent"
-    if fn.endswith(".pdf") or fn.endswith(".docx"):
-        return "document"
-    return "residential"
-
-def filetype(filename: str) -> str:
-    fn = filename.lower()
-    if fn.endswith(".csv"): return "csv"
-    if fn.endswith(".xlsx") or fn.endswith(".xls"): return "xlsx"
-    if fn.endswith(".pdf"): return "pdf"
-    if fn.endswith(".docx"): return "docx"
-    return "other"
 
 # ----------------------------
 # UI
@@ -133,21 +147,27 @@ if files:
                 dtype = guess_dataset_type(f.name)
                 ftype = filetype(f.name)
 
-                # 1) Documents: store extracted text
-                if dtype == "document":
-                    upload_id = insert_upload(conn, f.name, ftype, "document", 0, 0)
+                # Save file to disk first -> we always get stored_path
+                stored_path = save_uploaded_file(f)
 
+                # DOCUMENTS: save text
+                if dtype == "document":
+                    upload_id = insert_upload(
+                        conn, f.name, ftype, "document",
+                        row_count=0, col_count=0,
+                        stored_path=stored_path
+                    )
+
+                    text = ""
                     if ftype == "pdf":
-                        text = extract_pdf_text(f)
+                        text = extract_pdf_text(stored_path)
                     elif ftype == "docx":
-                        text = extract_docx_text(f)
-                    else:
-                        text = ""
+                        text = extract_docx_text(stored_path)
 
                     insert_document_text(conn, upload_id, text)
-                    st.success(f"✅ {f.name}: stored as document text ({len(text)} chars).")
+                    st.success(f"✅ {f.name}: stored document text ({len(text)} chars).")
 
-                # 2) Structured tables: insert rows (Residential only in this step)
+                # TABLES: residential wired now
                 else:
                     df_raw = read_table_file(f)
                     df = robust_prepare(df_raw)
@@ -157,24 +177,34 @@ if files:
                         df = df[REQUIRED_RESIDENTIAL].copy()
                         df = df.dropna(subset=["address", "price"], how="all")
 
-                        upload_id = insert_upload(conn, f.name, ftype, "residential", int(df.shape[0]), int(df.shape[1]))
+                        upload_id = insert_upload(
+                            conn, f.name, ftype, "residential",
+                            row_count=int(df.shape[0]), col_count=int(df.shape[1]),
+                            stored_path=stored_path
+                        )
 
                         df["upload_id"] = upload_id
                         df["created_at"] = datetime.utcnow()
 
                         rows = df.to_dict(orient="records")
-                        allowed_cols = ["upload_id", "ml_number", "status", "address", "city", "county", "zip",
-                                        "price", "sqft", "beds", "baths", "year_built", "created_at"]
-
+                        allowed_cols = [
+                            "upload_id", "ml_number", "status", "address", "city", "county", "zip",
+                            "price", "sqft", "beds", "baths", "year_built", "created_at"
+                        ]
                         inserted = bulk_insert_dicts(conn, "residential_listings", rows, allowed_cols)
                         st.success(f"✅ {f.name}: inserted {inserted} residential rows.")
 
                     else:
-                        # Land/Agent ingestion will be wired next
-                        upload_id = insert_upload(conn, f.name, ftype, dtype, int(df.shape[0]), int(df.shape[1]))
-                        st.warning(f"⚠️ {f.name}: detected '{dtype}'. File saved to uploads (upload_id={upload_id}). Land/Agent row insert is next step.")
+                        # Land/Agent wired next step, but still record upload
+                        upload_id = insert_upload(
+                            conn, f.name, ftype, dtype,
+                            row_count=int(df.shape[0]), col_count=int(df.shape[1]),
+                            stored_path=stored_path
+                        )
+                        st.warning(f"⚠️ {f.name}: detected '{dtype}'. Upload recorded (upload_id={upload_id}). Land/Agent row inserts are next step.")
 
             except Exception as e:
+                conn.rollback()
                 st.error(f"❌ {f.name}: {e}")
 
         conn.close()
