@@ -1,8 +1,7 @@
 streamlit
 pandas
-google-generativeai
 numpy
-folium
-streamlit-folium
-scikit-learn
+psycopg2-binary
+openpyxl
 pypdf
+python-docx
