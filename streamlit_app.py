@@ -1,6 +1,12 @@
 import streamlit as st
+from urllib.parse import quote_plus
 
-st.title("Database Connection Test")
+st.title("Password Encoder (Temporary Tool)")
 
-db_url = st.secrets.get("DATABASE_URL", "")
-st.write("DATABASE_URL loaded:", db_url.replace(db_url.split(":")[2].split("@")[0], "*****") if db_url else "MISSING")
+pw = st.text_input("Paste your DB password here (it will NOT be stored)", type="password")
+
+if pw:
+    encoded = quote_plus(pw)
+    st.subheader("Encoded password (copy this):")
+    st.code(encoded)
+    st.info("Now paste this encoded password into DATABASE_URL in Streamlit Secrets.")
