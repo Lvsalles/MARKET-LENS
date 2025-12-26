@@ -5,18 +5,11 @@ from psycopg2.extras import execute_values
 
 
 def get_db_conn():
-    """
-    Uses Streamlit Cloud Secrets:
-      DATABASE_URL = "postgresql://user:pass@host:port/dbname"
-    """
-    dsn = st.secrets["DATABASE_URL"]  # MUST be exactly this key in Secrets
+    dsn = st.secrets["DATABASE_URL"]  # MUST match Secrets key exactly
     return psycopg2.connect(dsn, sslmode="require")
 
 
 def get_table_columns(conn, table_name: str, schema: str = "public") -> list[str]:
-    """
-    Returns actual column names in the target table.
-    """
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -39,10 +32,6 @@ def insert_upload(
     col_count: int,
     stored_path: str,
 ):
-    """
-    uploads table MUST have these columns:
-      filename, filetype, dataset_type, row_count, col_count, stored_path (and upload_id default)
-    """
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -70,20 +59,10 @@ def insert_document_text(conn, upload_id, text: str):
 
 
 def bulk_insert_dicts(conn, table: str, rows: list[dict], schema: str = "public") -> int:
-    """
-    Inserts only columns that exist in the database table.
-    Prevents errors like:
-      - column "baths" does not exist
-      - column "zip" does not exist
-
-    Also avoids inserting identity columns like "id" (unless you explicitly include it and it exists).
-    """
     if not rows:
         return 0
 
     db_cols = set(get_table_columns(conn, table, schema=schema))
-
-    # Keep only keys that exist in the DB table
     cols = [c for c in rows[0].keys() if c in db_cols]
 
     if not cols:
@@ -91,13 +70,11 @@ def bulk_insert_dicts(conn, table: str, rows: list[dict], schema: str = "public"
 
     values = [[r.get(c) for c in cols] for r in rows]
 
+    col_sql = ", ".join([f'"{c}"' for c in cols])
+    sql = f'INSERT INTO "{schema}"."{table}" ({col_sql}) VALUES %s'
+
     with conn.cursor() as cur:
-        execute_values(
-            cur,
-            f'INSERT INTO "{schema}"."{table}" ({", ".join([f\'"{c}"\' for c in cols])}) VALUES %s',
-            values,
-            page_size=1000,
-        )
+        execute_values(cur, sql, values, page_size=1000)
 
     conn.commit()
     return len(rows)
