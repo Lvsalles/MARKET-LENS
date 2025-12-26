@@ -1,7 +1,6 @@
-streamlit
-pandas
-numpy
+streamlit>=1.32
 psycopg2-binary
-pypdf
-python-docx
-openpyxl
+sqlalchemy
+pandas
+pyyaml
+python-dotenv
