@@ -1,26 +1,16 @@
-price: price
-sqft: area_sqft
-lot_sqft: area_sqft
-acreage: area_sqft
+ml_number: [ml#, mls, listing_id]
+price: [list_price, sold_price, sale_price]
+area_sqft: [sqft, living_area, building_area]
+beds: [bedrooms, br]
+baths: [bathrooms, ba]
+year_built: [yearbuilt, built_year]
 
-list_agent_id: agent_key
-list_agent: agent_name
+agent_key: [list_agent_id, agent_id]
+agent_name: [list_agent, agent_name]
+office_key: [list_office_id, office_id]
 
-list_office_id: office_key
+buyer_financing: [financing, buyer_financing, loan_type]
+property_type: [property_type, residence_type]
 
-buyer_financing:
-  - buyer_financing
-  - financing
-  - loan_type
-
-property_type:
-  - property_type
-  - property_subtype
-
-adom:
-  - adom
-  - days_on_market_active
-
-cdom:
-  - cdom
-  - cumulative_dom
+adom: [adom]
+cdom: [cdom]
