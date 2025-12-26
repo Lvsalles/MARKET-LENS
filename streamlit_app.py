@@ -6,8 +6,8 @@ st.title("Database Connection Test")
 try:
     conn = psycopg2.connect(st.secrets["DATABASE_URL"], sslmode="require")
     cur = conn.cursor()
-    cur.execute("select 1;")
-    st.success("✅ Connected!")
+    cur.execute("SELECT 1;")
+    st.success("✅ Connected successfully!")
     cur.close()
     conn.close()
 except Exception as e:
