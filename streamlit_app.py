@@ -1,8 +1,14 @@
 import streamlit as st
-from urllib.parse import quote
+import psycopg2
 
-st.title("Password Encoder")
+st.title("Database Connection Test")
 
-pw = st.text_input("Paste DB password", type="password")
-if pw:
-    st.code(quote(pw, safe=""))
+try:
+    conn = psycopg2.connect(st.secrets["DATABASE_URL"], sslmode="require")
+    cur = conn.cursor()
+    cur.execute("SELECT 1;")
+    st.success("✅ Connected!")
+    cur.close()
+    conn.close()
+except Exception as e:
+    st.error(f"❌ Connection failed: {e}")
