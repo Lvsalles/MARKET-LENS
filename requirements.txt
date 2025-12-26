@@ -1,7 +1,8 @@
 streamlit
 pandas
 numpy
-psycopg2-binary
 openpyxl
+psycopg2-binary
+python-dateutil
 pypdf
 python-docx
