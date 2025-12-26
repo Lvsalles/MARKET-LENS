@@ -1,144 +1,26 @@
-# =========================
-# IDENTIFICAÇÃO
-# =========================
+price: price
+sqft: area_sqft
+lot_sqft: area_sqft
+acreage: area_sqft
 
-ml_number:
-  canonical: ml_number
-  aliases:
-    - mls_number
-    - listing_id
-    - listingnumber
-    - ml#
-    - mls#
+list_agent_id: agent_key
+list_agent: agent_name
 
-status:
-  canonical: status
-  aliases:
-    - mls_status
-    - listing_status
-    - property_status
+list_office_id: office_key
 
-# =========================
-# LOCALIZAÇÃO
-# =========================
+buyer_financing:
+  - buyer_financing
+  - financing
+  - loan_type
 
-address:
-  canonical: address
-  aliases:
-    - full_address
-    - street_address
-    - unparsed_address
+property_type:
+  - property_type
+  - property_subtype
 
-city:
-  canonical: city
-  aliases:
-    - municipality
-    - town
+adom:
+  - adom
+  - days_on_market_active
 
-county:
-  canonical: county
-  aliases:
-    - county_or_parish
-    - parish
-
-zip:
-  canonical: zip
-  aliases:
-    - zipcode
-    - postal_code
-    - postalcode
-
-# =========================
-# PREÇOS
-# =========================
-
-price:
-  canonical: price
-  aliases:
-    - list_price
-    - current_price
-    - close_price
-    - sold_price
-
-# =========================
-# TAMANHO / ÁREA
-# =========================
-
-sqft:
-  canonical: sqft
-  aliases:
-    - living_area
-    - heated_area
-    - building_area
-    - sqft_living
-
-lot_sqft:
-  canonical: lot_sqft
-  aliases:
-    - lot_size
-    - lot_size_sqft
-    - lot_square_feet
-
-acreage:
-  canonical: acreage
-  aliases:
-    - acres
-    - lot_acres
-    - site_acres
-
-# =========================
-# RESIDENCIAL
-# =========================
-
-beds:
-  canonical: beds
-  aliases:
-    - bedrooms
-    - br
-
-baths:
-  canonical: baths
-  aliases:
-    - bathrooms
-    - full_baths
-    - ba
-
-year_built:
-  canonical: year_built
-  aliases:
-    - yr_built
-    - built_year
-
-# =========================
-# AGENTES
-# =========================
-
-agent_key:
-  canonical: agent_key
-  aliases:
-    - list_agent_id
-    - agent_id
-    - agent_license
-    - license_number
-
-agent_name:
-  canonical: agent_name
-  aliases:
-    - list_agent
-    - agent
-    - agent_full_name
-    - list_agent_name
-
-office_key:
-  canonical: office_key
-  aliases:
-    - list_office_id
-    - office_id
-    - brokerage_id
-
-office_name:
-  canonical: office_name
-  aliases:
-    - list_office
-    - brokerage
-    - office
+cdom:
+  - cdom
+  - cumulative_dom
