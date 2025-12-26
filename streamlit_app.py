@@ -12,7 +12,6 @@ from docx import Document
 
 from db import get_db_conn, insert_upload, insert_document_text, bulk_insert_dicts
 
-
 st.set_page_config(page_title="MARKET LENS — Upload Center", layout="wide")
 
 st.title("MARKET LENS — Upload Center")
