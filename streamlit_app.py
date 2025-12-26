@@ -1,22 +1,21 @@
-import os
-import psycopg2
+import streamlit as st
+from db import get_db_conn
 
+st.set_page_config(page_title="MARKET LENS — Database Connection Test", layout="wide")
 
-def get_db_conn():
-    """
-    Creates and returns a PostgreSQL connection using DATABASE_URL
-    defined in Streamlit Secrets.
-    """
-    database_url = os.getenv("DATABASE_URL")
+st.title("MARKET LENS — Database Connection Test")
 
-    if not database_url:
-        raise RuntimeError("DATABASE_URL not found in environment variables")
-
+if st.button("Test Database Connection"):
     try:
-        conn = psycopg2.connect(
-            dsn=database_url,
-            sslmode="require"
-        )
-        return conn
+        conn = get_db_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT NOW();")
+        now = cur.fetchone()[0]
+        cur.close()
+        conn.close()
+
+        st.success(f"✅ Connected successfully! Server time: {now}")
+
     except Exception as e:
-        raise RuntimeError(f"Database connection failed: {e}")
+        st.error("❌ Connection failed")
+        st.exception(e)
