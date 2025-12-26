@@ -1,14 +1,6 @@
 import streamlit as st
-import psycopg2
 
 st.title("Database Connection Test")
 
-try:
-    conn = psycopg2.connect(st.secrets["DATABASE_URL"], sslmode="require")
-    cur = conn.cursor()
-    cur.execute("SELECT 1;")
-    st.success("✅ Database connected successfully!")
-    cur.close()
-    conn.close()
-except Exception as e:
-    st.error(f"❌ Connection failed: {e}")
+db_url = st.secrets.get("DATABASE_URL", "")
+st.write("DATABASE_URL loaded:", db_url.replace(db_url.split(":")[2].split("@")[0], "*****") if db_url else "MISSING")
