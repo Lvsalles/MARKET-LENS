@@ -4,11 +4,8 @@ from psycopg2.extras import execute_values
 
 
 def get_db_conn():
-    """
-    Uses Streamlit Cloud secrets:
-    st.secrets["DATABASE_URL"] = "postgresql://user:pass@host:6543/postgres"
-    """
     return psycopg2.connect(st.secrets["DATABASE_URL"], sslmode="require")
+
 
 
 def fetch_table_columns(conn, table_name: str, schema: str = "public") -> set[str]:
