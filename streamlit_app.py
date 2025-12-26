@@ -1,18 +1,14 @@
 import streamlit as st
 import psycopg2
 
-st.title("Market Lens – Connection Test")
+st.title("Database Connection Test")
 
 try:
-    conn = psycopg2.connect(st.secrets["DATABASE_URL"])
+    conn = psycopg2.connect(st.secrets["DATABASE_URL"], sslmode="require")
     cur = conn.cursor()
-    cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public';")
-    tables = cur.fetchall()
-    st.success("Connected successfully!")
-    st.write("Tables in database:")
-    for t in tables:
-        st.write("-", t[0])
+    cur.execute("SELECT 1;")
+    st.success("✅ Database connected successfully!")
     cur.close()
     conn.close()
 except Exception as e:
-    st.error(f"Connection error: {e}")
+    st.error(f"❌ Connection failed: {e}")
