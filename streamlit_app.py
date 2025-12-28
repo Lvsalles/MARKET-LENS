@@ -1,43 +1,33 @@
+import os
+import sys
 import streamlit as st
-import pandas as pd
-import uuid
+from sqlalchemy import text
 
-from db import engine
-from normalization import normalize_columns, enforce_schema
+# Garante que o diretório atual (onde estão db.py etc.) esteja no PYTHONPATH
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+if CURRENT_DIR not in sys.path:
+    sys.path.insert(0, CURRENT_DIR)
 
-st.set_page_config(page_title="Market Lens – Upload Center", layout="wide")
-st.title("📊 Market Lens — Upload Center")
+from db import get_engine  # noqa: E402
 
-uploaded_files = st.file_uploader(
-    "Upload CSV/XLSX files",
-    type=["csv", "xlsx"],
-    accept_multiple_files=True
+
+st.set_page_config(
+    page_title="Market Lens",
+    layout="wide"
 )
 
-if st.button("Process & Save") and uploaded_files:
-    upload_id = str(uuid.uuid4())
-    st.write("Upload ID:", upload_id)
+st.title("Market Lens — Backend Check")
 
-    for file in uploaded_files:
-        try:
-            if file.name.endswith(".csv"):
-                df = pd.read_csv(file)
-            else:
-                df = pd.read_excel(file)
+st.write("✅ App carregou. Agora vamos testar conexão com o Supabase (Postgres).")
 
-            df["upload_id"] = upload_id
+try:
+    engine = get_engine()
 
-            df = normalize_columns(df)
-            df = enforce_schema(df, "residential")
+    with engine.connect() as conn:
+        result = conn.execute(text("SELECT 1")).fetchone()
 
-            df.to_sql(
-                "residential_listings",
-                engine,
-                if_exists="append",
-                index=False
-            )
+    st.success(f"Conexão OK ✅ Resultado do teste: {result}")
 
-            st.success(f"{file.name}: uploaded {len(df)} rows")
-
-        except Exception as e:
-            st.error(f"{file.name}: {e}")
+except Exception as e:
+    st.error("Falha ao conectar no banco ❌")
+    st.exception(e)
