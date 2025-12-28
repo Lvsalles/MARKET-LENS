@@ -1,6 +1,6 @@
-streamlit>=1.32
-psycopg2-binary
-sqlalchemy
+streamlit
 pandas
-pyyaml
-python-dotenv
+numpy
+sqlalchemy
+psycopg2-binary
+openpyxl
