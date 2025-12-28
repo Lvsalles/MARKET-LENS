@@ -26,3 +26,4 @@ engine = create_engine(
     pool_size=5,
     max_overflow=10
 )
+print("DATABASE_URL =", DATABASE_URL)
