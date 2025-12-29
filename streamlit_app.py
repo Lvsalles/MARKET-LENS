@@ -1,32 +1,31 @@
 import streamlit as st
 
-# 1. Configuração de página (Sempre o primeiro comando)
+# 1. Configuração de página (Obrigatório ser a primeira linha Streamlit)
 st.set_page_config(
     page_title="Market Lens",
     layout="wide"
 )
 
-# 2. Imports após o config
-import os
+# 2. Imports
 from sqlalchemy import text
 from db import get_engine
 
-# 3. Título da App
-st.title("🔍 Market Lens")
+st.title("Market Lens")
 
-# 4. Lógica de Conexão
 try:
+    # 3. Obtendo o motor de conexão
     engine = get_engine()
     
-    # Usando o context manager para garantir que a conexão feche após o uso
+    # 4. Testando a conexão de forma segura (SQLAlchemy 2.0+)
     with engine.connect() as conn:
-        # SELECT 1 é o teste padrão para ver se o banco responde
+        # É vital usar text() em volta da query
         result = conn.execute(text("SELECT 1"))
-        # No SQLAlchemy 2.0, é boa prática fechar a transação se necessário
+        # Confirma que o resultado foi lido
+        result.fetchone()
         
-    st.success("✅ Conexão com o banco estabelecida com sucesso!")
-    
+    st.success("Conexão com o banco estabelecida com sucesso!")
+
 except Exception as e:
-    st.error("❌ Erro ao conectar ao banco")
-    # Mostra o erro detalhado para diagnóstico
+    st.error("Erro ao conectar ao banco")
+    st.info("Dica: Verifique se o ID do projeto no usuário está correto (postgres.ID-PROJETO)")
     st.exception(e)
