@@ -1,20 +1,27 @@
-import streamlit as st
 from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
+import os
 
 def get_engine():
-    if "database" not in st.secrets or "url" not in st.secrets["database"]:
-        raise RuntimeError(
-            "Missing Streamlit Secrets. Add:\n"
-            "[database]\n"
-            "url = \"postgresql+psycopg2://...\""
+    db_url = os.getenv("SUPABASE_DB_URL")
+
+    if not db_url:
+        raise RuntimeError("SUPABASE_DB_URL não definida")
+
+    try:
+        engine = create_engine(
+            db_url,
+            pool_pre_ping=True,
+            pool_size=3,
+            max_overflow=0,
+            connect_args={"connect_timeout": 5}  # 🔥 evita ficar rodando
         )
 
-    db_url = st.secrets["database"]["url"]
+        # Teste imediato
+        with engine.connect() as conn:
+            conn.execute("SELECT 1")
 
-    return create_engine(
-        db_url,
-        pool_pre_ping=True,
-        pool_recycle=1800,
-        pool_size=5,
-        max_overflow=10,
-    )
+        return engine
+
+    except OperationalError as e:
+        raise RuntimeError(f"Falha ao conectar no Supabase: {e}")
