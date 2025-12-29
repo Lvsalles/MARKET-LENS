@@ -1,31 +1,32 @@
-from sqlalchemy import text
-from db import get_engine
+import pandas as pd
 
+# Colunas que EXISTEM no banco
+ALLOWED_COLUMNS = {
+    "ml_number",
+    "status",
+    "address",
+    "city",
+    "zipcode",
+    "legal_subdivision_name",
+    "heated_area",
+    "current_price",
+    "beds",
+    "full_baths",
+    "half_baths",
+    "year_built",
+    "pool"
+}
 
-def insert_into_staging(df, project_id, category):
-    engine = get_engine()
+def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df.columns = (
+        df.columns
+        .str.strip()
+        .str.lower()
+        .str.replace(" ", "_")
+        .str.replace("-", "_")
+    )
 
-    with engine.begin() as conn:
+    # manter apenas colunas válidas
+    df = df[[c for c in df.columns if c in ALLOWED_COLUMNS]]
 
-        # 1️⃣ Remove dados antigos do mesmo projeto + categoria
-        delete_sql = text("""
-            DELETE FROM stg_mls
-            WHERE project_id = :project_id
-              AND category = :category
-        """)
-        conn.execute(delete_sql, {
-            "project_id": project_id,
-            "category": category
-        })
-
-        # 2️⃣ Insere os novos dados
-        df["project_id"] = project_id
-        df["category"] = category
-
-        df.to_sql(
-            "stg_mls",
-            con=conn,
-            if_exists="append",
-            index=False,
-            method="multi"
-        )
+    return df
