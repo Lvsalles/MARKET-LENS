@@ -1,10 +1,15 @@
 import pandas as pd
 from sqlalchemy import text
 
-# ============================
-# LEITURA DO STAGING
-# ============================
+# ============================================================
+# LEITURA BASE
+# ============================================================
+
 def read_stg(engine, project_id: str, category: str | None = None):
+    """
+    Lê dados da tabela stg_mls e filtra por categoria lógica
+    (Sold / Listings / Pending / Rental / Land)
+    """
     base_query = """
         SELECT *
         FROM stg_mls
@@ -27,32 +32,51 @@ def read_stg(engine, project_id: str, category: str | None = None):
         return pd.read_sql(base_query, conn, params={"project_id": project_id})
 
 
-# ============================
-# MÉTRICAS
-# ============================
+# ============================================================
+# CONTAGEM POR STATUS
+# ============================================================
 
-def table_row_counts(engine, project_id):
-    q = """
-        SELECT status, COUNT(*) AS total
+def table_row_counts(engine, project_id: str):
+    """
+    Retorna quantidade de registros por tipo (Sold, Listings, etc)
+    baseado em STATUS.
+    """
+    query = """
+        SELECT
+            CASE
+                WHEN status ILIKE '%SOLD%' THEN 'Sold'
+                WHEN status ILIKE '%CLOSED%' THEN 'Sold'
+                WHEN status ILIKE '%ACTIVE%' THEN 'Listings'
+                WHEN status ILIKE '%PENDING%' THEN 'Pending'
+                WHEN status ILIKE '%RENT%' THEN 'Rental'
+                ELSE 'Other'
+            END AS category,
+            COUNT(*) AS total
         FROM stg_mls
         WHERE project_id = :project_id
-        GROUP BY status
+        GROUP BY 1
         ORDER BY total DESC
     """
     with engine.begin() as conn:
-        return pd.read_sql(q, conn, params={"project_id": project_id})
+        return pd.read_sql(query, conn, params={"project_id": project_id})
 
 
-def weighted_avg(series, weights):
-    series = pd.to_numeric(series, errors="coerce")
+# ============================================================
+# MÉTRICAS (PONDERADAS)
+# ============================================================
+
+def weighted_average(values, weights):
+    values = pd.to_numeric(values, errors="coerce")
     weights = pd.to_numeric(weights, errors="coerce")
-    mask = (series.notna()) & (weights.notna()) & (weights > 0)
+
+    mask = (values.notna()) & (weights.notna()) & (weights > 0)
     if mask.sum() == 0:
         return None
-    return (series[mask] * weights[mask]).sum() / weights[mask].sum()
+
+    return (values[mask] * weights[mask]).sum() / weights[mask].sum()
 
 
-def investor_grade_overview(df):
+def investor_grade_overview(df: pd.DataFrame):
     if df.empty:
         return pd.DataFrame()
 
@@ -61,11 +85,10 @@ def investor_grade_overview(df):
     def add(metric, col):
         if col not in df.columns:
             return
-        w = df["sqft"] if "sqft" in df.columns else None
-        value = weighted_avg(df[col], w)
+        value = weighted_average(df[col], df.get("sqft"))
         results.append({
             "metric": metric,
-            "weighted_avg": value
+            "weighted_avg": round(value, 2) if value else None
         })
 
     add("Sold Price", "sold_price")
