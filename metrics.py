@@ -2,102 +2,66 @@ import pandas as pd
 from sqlalchemy import text
 
 
-# =========================================
-# UTILIDADES
-# =========================================
-
-def table_has_column(engine, table_name: str, column_name: str) -> bool:
-    query = text("""
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_name = :table
-          AND column_name = :column
-        LIMIT 1
-    """)
-    with engine.begin() as conn:
-        res = conn.execute(query, {"table": table_name, "column": column_name}).fetchone()
-    return res is not None
-
-
-# =========================================
+# ===============================
 # LEITURA SEGURA DO BANCO
-# =========================================
-
+# ===============================
 def read_stg(engine, project_id: str) -> pd.DataFrame:
-    """
-    Lê dados da tabela stg_mls.
-    Sempre retorna um DataFrame válido (mesmo vazio).
-    """
     try:
-        has_project = table_has_column(engine, "stg_mls", "project_id")
-
-        if has_project:
-            sql = text("SELECT * FROM stg_mls WHERE project_id = :project_id")
-            params = {"project_id": project_id}
-        else:
-            sql = text("SELECT * FROM stg_mls")
-            params = {}
-
+        query = text("""
+            SELECT *
+            FROM stg_mls
+            WHERE project_id = :project_id
+        """)
         with engine.begin() as conn:
-            df = pd.read_sql(sql, conn, params=params)
-
-        if df is None:
-            return pd.DataFrame()
-
+            df = pd.read_sql(query, conn, params={"project_id": project_id})
         return df
 
     except Exception as e:
-        print("ERRO AO LER stg_mls:", str(e))
+        print("ERRO AO LER STG:", e)
         return pd.DataFrame()
 
 
-# =========================================
+# ===============================
 # CLASSIFICAÇÃO DE STATUS
-# =========================================
-
+# ===============================
 def classify_rows(df: pd.DataFrame):
-    if df is None or df.empty:
-        return pd.DataFrame(), {}
+    if df.empty:
+        return df, {}
 
-    df = df.copy()
+    def normalize(x):
+        return str(x).strip().upper()
 
-    # detectar colunas
-    def find_col(keys):
-        for c in df.columns:
-            for k in keys:
-                if k in c.lower():
-                    return c
-        return None
-
-    status_col = find_col(["status"])
-    type_col = find_col(["type", "property"])
+    status_col = None
+    for c in df.columns:
+        if "status" in c.lower():
+            status_col = c
+            break
 
     def classify(row):
-        text = f"{str(row.get(status_col, ''))} {str(row.get(type_col, ''))}".upper()
-        if "SOLD" in text or "CLOSED" in text:
+        s = normalize(row.get(status_col, ""))
+
+        if "SOLD" in s or "CLOSED" in s:
             return "Sold"
-        if "ACTIVE" in text:
+        if "ACTIVE" in s:
             return "Listings"
-        if "PENDING" in text:
+        if "PENDING" in s:
             return "Pending"
-        if "RENT" in text:
+        if "RENT" in s:
             return "Rental"
-        if "LAND" in text:
+        if "LAND" in s:
             return "Land"
         return "Other"
 
     df["category"] = df.apply(classify, axis=1)
 
     return df, {
-        "status_col": status_col,
-        "type_col": type_col
+        "status_col": status_col
     }
 
 
-# =========================================
-# CONTAGENS
-# =========================================
-
+# ===============================
+# MÉTRICAS SIMPLES
+# ===============================
 def table_row_counts(df: pd.DataFrame):
     if df is None or df.empty:
         return pd.DataFrame(columns=["category", "rows"])
