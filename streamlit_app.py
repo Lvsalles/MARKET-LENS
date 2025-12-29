@@ -198,4 +198,155 @@ def cast_types(df: pd.DataFrame) -> pd.DataFrame:
         df["sp_lp"] = df["sold_price"] / df["list_price"]
 
     if "sqft" in df.columns:
-        i
+        if "sold_price" in df.columns:
+            df["ppsqft"] = df["sold_price"] / df["sqft"]
+        elif "list_price" in df.columns:
+            df["ppsqft"] = df["list_price"] / df["sqft"]
+
+    return df
+
+
+def filter_to_db_columns(df: pd.DataFrame, engine) -> pd.DataFrame:
+    """
+    NÃO deixa o insert quebrar:
+    mantém somente colunas que existem na tabela stg_mls.
+    """
+    insp = inspect(engine)
+    db_cols = set([c["name"] for c in insp.get_columns("stg_mls")])
+
+    keep = [c for c in df.columns if c in db_cols]
+    dropped = [c for c in df.columns if c not in db_cols]
+
+    return df[keep], dropped
+
+
+def delete_previous_category(engine, project_id: str, category: str):
+    """
+    Evita duplicação: apaga registros antigos do mesmo project + category.
+    """
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                DELETE FROM stg_mls
+                WHERE project_id = :project_id
+                  AND category = :category
+            """),
+            {"project_id": project_id, "category": category}
+        )
+
+
+def count_rows_by_category(engine, project_id: str):
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT category, COUNT(*) as n
+                FROM stg_mls
+                WHERE project_id = :project_id
+                GROUP BY category
+                ORDER BY category
+            """),
+            {"project_id": project_id}
+        ).fetchall()
+    return rows
+
+
+# =========================
+# UI
+# =========================
+
+st.subheader("1) Upload (até 12 arquivos)")
+uploaded_files = st.file_uploader(
+    "Selecione um ou mais arquivos Excel (.xlsx)",
+    type=["xlsx"],
+    accept_multiple_files=True
+)
+
+st.subheader("2) Identificação do projeto")
+project_id = st.text_input("Project ID", value="default_project")
+
+st.subheader("3) Categoria (opcional)")
+st.caption("Você pode escolher uma categoria fixa, ou deixar o sistema detectar pelo nome do arquivo.")
+mode = st.radio("Como definir categoria?", ["Detectar pelo nome do arquivo (recomendado)", "Escolher manualmente"], index=0)
+
+manual_category = None
+if mode == "Escolher manualmente":
+    manual_category = st.selectbox("Categoria fixa para TODOS os arquivos", ["Listings", "Pendings", "Sold", "Land", "Rental"])
+
+st.divider()
+
+# =========================
+# RUN IMPORT
+# =========================
+if uploaded_files:
+    if len(uploaded_files) > MAX_FILES:
+        st.error(f"Você selecionou {len(uploaded_files)} arquivos. O máximo é {MAX_FILES}.")
+        st.stop()
+
+    # conecta no banco
+    try:
+        engine = get_engine()
+        st.success("Banco conectado com sucesso ✅")
+    except Exception as e:
+        st.error("Erro ao conectar no banco ❌")
+        st.code(str(e))
+        st.stop()
+
+    if st.button("📥 Importar TODOS para o banco (stg_mls)"):
+        for f in uploaded_files:
+            category = manual_category if manual_category else guess_category_from_filename(f.name)
+
+            st.write("")
+            st.markdown(f"### 📄 Processando: `{f.name}`  → **{category}**")
+
+            try:
+                df = pd.read_excel(f, engine="openpyxl")
+                st.info(f"Linhas lidas do Excel: **{len(df)}**")
+
+                df = sanitize_columns(df)
+                df = map_common_columns(df)
+                df = ensure_month_key(df)
+                df = cast_types(df)
+
+                # adiciona campos obrigatórios
+                df["project_id"] = project_id
+                df["category"] = category
+
+                # evita duplicação: limpa project+category antes
+                delete_previous_category(engine, project_id, category)
+
+                # filtra colunas para não quebrar no insert
+                df_to_insert, dropped = filter_to_db_columns(df, engine)
+
+                if len(df_to_insert.columns) == 0:
+                    st.error("Nenhuma coluna do Excel corresponde ao schema do banco (stg_mls).")
+                    st.write("Colunas do arquivo:", list(df.columns))
+                    continue
+
+                # insere
+                df_to_insert.to_sql(
+                    "stg_mls",
+                    engine,
+                    if_exists="append",
+                    index=False,
+                    method="multi"
+                )
+
+                st.success(f"✅ Importado com sucesso: {f.name}")
+                st.write(f"Colunas inseridas: {len(df_to_insert.columns)}")
+                if dropped:
+                    st.caption(f"Colunas ignoradas (não existem no banco): {', '.join(dropped[:25])}" + (" ..." if len(dropped) > 25 else ""))
+
+            except Exception as e:
+                st.error(f"❌ Erro ao importar {f.name}")
+                st.code(str(e))
+
+        st.divider()
+        st.subheader("Resumo no banco (stg_mls) por categoria")
+        rows = count_rows_by_category(engine, project_id)
+        if rows:
+            st.dataframe(pd.DataFrame(rows, columns=["category", "rows"]))
+        else:
+            st.info("Nenhum registro encontrado para este project_id.")
+
+else:
+    st.info("Envie arquivos para começar. Depois clique em **Importar TODOS**.")
