@@ -1,44 +1,92 @@
 import streamlit as st
 import pandas as pd
-from sqlalchemy import create_engine
-from etl import load_excel_to_db
+from sqlalchemy import create_engine, text
+import os
 
-st.set_page_config(page_title="Market Lens", layout="wide")
-
-st.title("📊 Market Lens — Real Estate Intelligence")
-
-DB_URL = st.secrets["database"]["url"]
-engine = create_engine(DB_URL)
-
-# Upload
-st.header("📥 Upload de Arquivos")
-uploaded_files = st.file_uploader(
-    "Selecione arquivos (XLSX)",
-    type=["xlsx"],
-    accept_multiple_files=True
+# -----------------------------
+# CONFIG
+# -----------------------------
+st.set_page_config(
+    page_title="Market Lens",
+    layout="wide"
 )
 
-project_id = st.text_input("Project ID", value="default_project")
+st.title("📊 Market Lens – Data Explorer")
 
-if uploaded_files:
-    for file in uploaded_files:
-        with st.spinner(f"Processando {file.name}..."):
-            load_excel_to_db(engine, file, project_id)
-        st.success(f"{file.name} importado com sucesso!")
+# -----------------------------
+# DATABASE CONNECTION
+# -----------------------------
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-st.divider()
+if not DATABASE_URL:
+    st.error("❌ DATABASE_URL não configurado.")
+    st.stop()
 
-# Overview
-st.header("📊 Overview — Market Snapshot")
+engine = create_engine(DATABASE_URL)
 
-query = """
-SELECT
-    category,
-    COUNT(*) AS total
-FROM stg_mls
-WHERE project_id = :pid
-GROUP BY category
-"""
+# -----------------------------
+# LOAD SCHEMA SAFELY
+# -----------------------------
+@st.cache_data
+def get_columns():
+    with engine.connect() as conn:
+        result = conn.execute(text("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'stg_mls'
+            ORDER BY ordinal_position
+        """))
+        return [r[0] for r in result]
 
-df = pd.read_sql(query, engine, params={"pid": project_id})
-st.dataframe(df, use_container_width=True)
+columns = get_columns()
+
+st.success("Conectado ao banco com sucesso ✅")
+st.write("### Colunas detectadas:")
+st.write(columns)
+
+# -----------------------------
+# LOAD DATA (SAFE)
+# -----------------------------
+@st.cache_data
+def load_data():
+    query = "SELECT * FROM stg_mls LIMIT 5000"
+    return pd.read_sql(query, engine)
+
+df = load_data()
+
+# -----------------------------
+# VISUALIZAÇÃO BÁSICA
+# -----------------------------
+st.subheader("📊 Preview dos Dados")
+st.dataframe(df.head(50), use_container_width=True)
+
+# -----------------------------
+# CONTADORES BÁSICOS (SE EXISTIREM)
+# -----------------------------
+st.subheader("📈 Resumo Geral")
+
+cols = df.columns.str.lower()
+
+def safe_count(col):
+    return df[col].notna().sum() if col in df.columns else "N/A"
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.metric("Total Registros", len(df))
+with col2:
+    st.metric("Com Preço", safe_count("list_price"))
+with col3:
+    st.metric("Com Status", safe_count("status") if "status" in cols else "N/A")
+
+# -----------------------------
+# VISUALIZAÇÃO POR STATUS (SE EXISTIR)
+# -----------------------------
+if "status" in df.columns:
+    st.subheader("Distribuição por Status")
+    st.bar_chart(df["status"].value_counts())
+
+# -----------------------------
+# DEBUG FINAL
+# -----------------------------
+with st.expander("🔍 Debug – Estrutura Completa"):
+    st.write(df.dtypes)
