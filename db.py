@@ -1,26 +1,22 @@
 import streamlit as st
-from sqlalchemy import create_engine, URL
+from sqlalchemy import create_engine
+from sqlalchemy.engine import URL
 
 def get_engine():
-    """
-    Cria a conexão com o banco de dados Supabase usando os segredos do Streamlit.
-    """
-    # É mais seguro construir a URL parte por parte para evitar erros de caractere especial
-    try:
-        # Pega a URL bruta dos secrets (opcional, caso queira manter compatibilidade)
-        # Mas a melhor prática para o erro "Tenant not found" é garantir estes campos:
-        db_url = URL.create(
-            drivername="postgresql+psycopg2",
-            username="postgres.kzkxqsivqymdtmtyzmqh",
-            password="G@bys2010", # Coloque a senha real aqui ou via st.secrets
-            host="aws-0-us-east-1.pooler.supabase.com",
-            port=6543,
-            database="postgres",
-            query={"sslmode": "require"}
-        )
-        
-        # O pool_pre_ping=True ajuda a evitar erros de conexão caída no Streamlit
-        return create_engine(db_url, pool_pre_ping=True)
+    # Se você configurou SUPABASE_DB_URL no Secrets do Streamlit, 
+    # vamos extrair os dados ou usar a URL direto.
+    # A forma mais garantida para o erro "Tenant not found" é reconstruir a URL:
     
+    try:
+        # Tenta pegar a string dos secrets
+        connection_url = st.secrets["SUPABASE_DB_URL"]
+        
+        # Criamos o engine com pool_pre_ping para evitar que conexões inativas derrubem o app
+        return create_engine(
+            connection_url,
+            pool_pre_ping=True,
+            pool_recycle=300
+        )
     except Exception as e:
-        raise Exception(f"Erro ao configurar o motor de banco de dados: {e}")
+        st.error("Falha ao carregar SUPABASE_DB_URL dos Secrets.")
+        raise e
