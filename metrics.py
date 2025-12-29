@@ -1,94 +1,88 @@
 import pandas as pd
-from sqlalchemy import text
 
-# ============================================================
-# LEITURA BASE
-# ============================================================
+# ============================
+# LOAD DATA (SAFE)
+# ============================
 
-def read_stg(engine, project_id: str, category: str | None = None):
-    """
-    Lê dados da tabela stg_mls e filtra por categoria lógica
-    (Sold / Listings / Pending / Rental / Land)
-    """
-    base_query = """
+def read_stg(engine, project_id: str):
+    query = """
         SELECT *
         FROM stg_mls
         WHERE project_id = :project_id
-    """
-
-    if category:
-        if category == "Sold":
-            base_query += " AND status ILIKE '%SOLD%'"
-        elif category == "Listings":
-            base_query += " AND status ILIKE '%ACTIVE%'"
-        elif category == "Pending":
-            base_query += " AND status ILIKE '%PENDING%'"
-        elif category == "Rental":
-            base_query += " AND status ILIKE '%RENT%'"
-        elif category == "Land":
-            base_query += " AND property_type ILIKE '%LAND%'"
-
-    with engine.begin() as conn:
-        return pd.read_sql(base_query, conn, params={"project_id": project_id})
-
-
-# ============================================================
-# CONTAGEM POR STATUS
-# ============================================================
-
-def table_row_counts(engine, project_id: str):
-    """
-    Retorna quantidade de registros por tipo (Sold, Listings, etc)
-    baseado em STATUS.
-    """
-    query = """
-        SELECT
-            CASE
-                WHEN status ILIKE '%SOLD%' THEN 'Sold'
-                WHEN status ILIKE '%CLOSED%' THEN 'Sold'
-                WHEN status ILIKE '%ACTIVE%' THEN 'Listings'
-                WHEN status ILIKE '%PENDING%' THEN 'Pending'
-                WHEN status ILIKE '%RENT%' THEN 'Rental'
-                ELSE 'Other'
-            END AS category,
-            COUNT(*) AS total
-        FROM stg_mls
-        WHERE project_id = :project_id
-        GROUP BY 1
-        ORDER BY total DESC
     """
     with engine.begin() as conn:
         return pd.read_sql(query, conn, params={"project_id": project_id})
 
 
-# ============================================================
-# MÉTRICAS (PONDERADAS)
-# ============================================================
+# ============================
+# CLASSIFICATION LOGIC
+# ============================
 
-def weighted_average(values, weights):
-    values = pd.to_numeric(values, errors="coerce")
+def classify_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Cria coluna 'category' a partir de texto livre (status, property_type etc)
+    """
+    def classify(row):
+        txt = " ".join(
+            str(v).upper()
+            for v in [
+                row.get("status", ""),
+                row.get("property_type", ""),
+                row.get("property_sub_type", "")
+            ]
+        )
+
+        if "SOLD" in txt or "CLOSED" in txt:
+            return "Sold"
+        if "ACTIVE" in txt:
+            return "Listings"
+        if "PENDING" in txt:
+            return "Pending"
+        if "RENT" in txt:
+            return "Rental"
+        if "LAND" in txt or "LOT" in txt:
+            return "Land"
+        return "Other"
+
+    df = df.copy()
+    df["category"] = df.apply(classify, axis=1)
+    return df
+
+
+# ============================
+# METRICS
+# ============================
+
+def table_row_counts(df: pd.DataFrame):
+    return (
+        df.groupby("category")
+        .size()
+        .reset_index(name="rows")
+        .sort_values("rows", ascending=False)
+    )
+
+
+def weighted_avg(series, weights):
+    series = pd.to_numeric(series, errors="coerce")
     weights = pd.to_numeric(weights, errors="coerce")
 
-    mask = (values.notna()) & (weights.notna()) & (weights > 0)
-    if mask.sum() == 0:
+    mask = (series.notna()) & (weights.notna()) & (weights > 0)
+    if not mask.any():
         return None
 
-    return (values[mask] * weights[mask]).sum() / weights[mask].sum()
+    return (series[mask] * weights[mask]).sum() / weights[mask].sum()
 
 
 def investor_grade_overview(df: pd.DataFrame):
-    if df.empty:
-        return pd.DataFrame()
+    rows = []
 
-    results = []
-
-    def add(metric, col):
+    def add(label, col):
         if col not in df.columns:
             return
-        value = weighted_average(df[col], df.get("sqft"))
-        results.append({
-            "metric": metric,
-            "weighted_avg": round(value, 2) if value else None
+        val = weighted_avg(df[col], df.get("sqft"))
+        rows.append({
+            "metric": label,
+            "weighted_avg": val
         })
 
     add("Sold Price", "sold_price")
@@ -97,4 +91,4 @@ def investor_grade_overview(df: pd.DataFrame):
     add("Beds", "beds")
     add("Baths", "baths")
 
-    return pd.DataFrame(results)
+    return pd.DataFrame(rows)
