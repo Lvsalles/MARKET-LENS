@@ -1,23 +1,4 @@
-import pandas as pd
-
-# Colunas que EXISTEM no banco
-ALLOWED_COLUMNS = {
-    "ml_number",
-    "status",
-    "address",
-    "city",
-    "zipcode",
-    "legal_subdivision_name",
-    "heated_area",
-    "current_price",
-    "beds",
-    "full_baths",
-    "half_baths",
-    "year_built",
-    "pool"
-}
-
-def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+def normalize_columns(df):
     df.columns = (
         df.columns
         .str.strip()
@@ -26,7 +7,28 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
         .str.replace("-", "_")
     )
 
-    # manter apenas colunas válidas
-    df = df[[c for c in df.columns if c in ALLOWED_COLUMNS]]
+    # Normalizar status
+    if "status" in df.columns:
+        df["status"] = df["status"].astype(str).str.upper()
+    elif "status_name" in df.columns:
+        df["status"] = df["status_name"].astype(str).str.upper()
+    else:
+        df["status"] = "UNKNOWN"
+
+    # Criar coluna category (CRÍTICO)
+    def infer_category(row):
+        s = row["status"]
+
+        if "SOLD" in s or "CLOSED" in s:
+            return "Sold"
+        if "ACTIVE" in s or "ACTIVE UNDER CONTRACT" in s:
+            return "Listings"
+        if "RENT" in s or "LEASE" in s:
+            return "Rental"
+        if "LAND" in s or "LOT" in s:
+            return "Land"
+        return "Other"
+
+    df["category"] = df.apply(infer_category, axis=1)
 
     return df
