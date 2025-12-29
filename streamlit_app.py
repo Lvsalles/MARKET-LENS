@@ -7,9 +7,9 @@ st.set_page_config(page_title="Market Lens", layout="wide")
 
 st.title("📊 Market Lens — Upload de Dados")
 
-# -----------------------------
-# Upload múltiplo de arquivos
-# -----------------------------
+# =========================
+# Upload
+# =========================
 uploaded_files = st.file_uploader(
     "Selecione um ou mais arquivos Excel",
     type=["xlsx"],
@@ -18,10 +18,12 @@ uploaded_files = st.file_uploader(
 
 category = st.selectbox(
     "Tipo de dados",
-    ["Listings", "Pendings", "Sold", "Land", "Rental"]
+    ["Listings", "Pending", "Sold", "Land", "Rental"]
 )
 
 project_id = st.text_input("Project ID", value="default_project")
+
+st.divider()
 
 if uploaded_files:
     for uploaded_file in uploaded_files:
@@ -29,13 +31,21 @@ if uploaded_files:
 
         try:
             df = pd.read_excel(uploaded_file)
-            st.success(f"{len(df)} linhas carregadas")
+            st.success(f"Arquivo lido: {len(df)} linhas")
 
+            # NORMALIZA
             df = normalize_columns(df)
+            st.write("Preview dos dados:")
+            st.dataframe(df.head(10))
+
+            # INSERÇÃO
             insert_into_staging(df, project_id, category)
 
-            st.success(f"Arquivo {uploaded_file.name} importado com sucesso!")
+            st.success(f"✅ Importado com sucesso: {uploaded_file.name}")
 
         except Exception as e:
-            st.error(f"Erro ao importar {uploaded_file.name}")
+            st.error(f"❌ Erro ao importar {uploaded_file.name}")
             st.code(str(e))
+
+else:
+    st.info("Envie um ou mais arquivos Excel para começar.")
