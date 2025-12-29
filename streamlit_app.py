@@ -1,125 +1,92 @@
 import streamlit as st
 import pandas as pd
+from sqlalchemy import create_engine, text
 
-from db import get_engine
-from etl import detect_and_map, insert_into_staging
-from sqlalchemy import text
+# ======================================================
+# CONFIGURAÇÃO INICIAL
+# ======================================================
+st.set_page_config(
+    page_title="Market Lens",
+    layout="wide"
+)
 
-st.set_page_config(page_title="Market Lens", layout="wide", page_icon="📊")
-st.title("📊 Market Lens — Market Intelligence")
+st.title("📊 Market Lens — Base Operacional")
 
-# =========================
-# DB CONNECT
-# =========================
+# ======================================================
+# CONEXÃO COM BANCO
+# ======================================================
+def get_engine():
+    if "database" not in st.secrets:
+        raise RuntimeError("Secrets não encontrados. Configure database.url no Streamlit Cloud.")
+
+    db_url = st.secrets["database"]["url"]
+    return create_engine(db_url, pool_pre_ping=True)
+
+
+# ======================================================
+# TESTE DE CONEXÃO
+# ======================================================
 try:
     engine = get_engine()
-    st.success("Banco conectado com sucesso ✅")
+    with engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
+    st.success("✅ Conexão com banco estabelecida com sucesso.")
 except Exception as e:
-    st.error("Erro ao conectar ao banco")
+    st.error("❌ Erro ao conectar com o banco.")
     st.code(str(e))
     st.stop()
 
-# =========================
-# SIDEBAR
-# =========================
-with st.sidebar:
-    st.header("Configurações")
-    project_id = st.text_input("Project ID", value="default_project")
-    data_type = st.selectbox("Tipo de dados", ["Properties (ACT/PND/SLD juntos)", "Land", "Rental"])
-    st.caption("Dica: Properties pode conter ACT/PND/SLD no mesmo arquivo.")
+# ======================================================
+# FUNÇÃO DE LEITURA SEGURA
+# ======================================================
+def load_data(project_id: str) -> pd.DataFrame:
+    try:
+        query = text("""
+            SELECT *
+            FROM stg_mls
+            WHERE project_id = :project_id
+        """)
+        with engine.begin() as conn:
+            df = pd.read_sql(query, conn, params={"project_id": project_id})
+        return df
+    except Exception as e:
+        st.error("Erro ao carregar dados.")
+        st.code(str(e))
+        return pd.DataFrame()
 
-tabs = st.tabs(["Upload", "Diagnostics", "Overview"])
+# ======================================================
+# UI
+# ======================================================
+st.subheader("🔎 Seleção do Projeto")
 
-# =========================
-# TAB 1 — UPLOAD
-# =========================
-with tabs[0]:
-    st.subheader("📥 Upload (até 12 arquivos .xlsx)")
+project_id = st.text_input("Project ID", value="default_project")
 
-    files = st.file_uploader(
-        "Arraste e solte os arquivos XLSX aqui",
-        type=["xlsx"],
-        accept_multiple_files=True
-    )
-
-    if files and len(files) > 12:
-        st.error("Máximo 12 arquivos por upload.")
-        st.stop()
-
-    if files:
-        st.info(f"{len(files)} arquivo(s) selecionado(s).")
-
-        if st.button("Processar e salvar no banco"):
-            total_inserted = 0
-            total_skipped = 0
-
-            with st.spinner("Processando arquivos..."):
-                for f in files:
-                    df_raw = pd.read_excel(f)
-                    df_canon = detect_and_map(df_raw)
-
-                    stats = insert_into_staging(engine, df_canon, project_id=project_id, source_file=f.name)
-
-                    total_inserted += stats["inserted"]
-                    total_skipped += stats["skipped_duplicates"]
-
-                    st.write(f"✅ {f.name} — inserted: {stats['inserted']} | duplicates skipped: {stats['skipped_duplicates']}")
-
-            st.success(f"Concluído. Inseridos: {total_inserted} | Duplicados ignorados: {total_skipped}")
-
-# =========================
-# TAB 2 — DIAGNOSTICS
-# =========================
-with tabs[1]:
-    st.subheader("🧪 Diagnostics (qualidade + conferência)")
-
-    q = text("""
-        SELECT status_norm, COUNT(*) as rows
-        FROM stg_mls
-        WHERE project_id = :project_id
-        GROUP BY 1
-        ORDER BY rows DESC
-    """)
-    with engine.begin() as conn:
-        df_counts = pd.read_sql(q, conn, params={"project_id": project_id})
-
-    st.write("Distribuição por status_norm (SOLD/ACTIVE/PENDING/RENTAL/LAND):")
-    st.dataframe(df_counts, use_container_width=True)
-
-    q2 = text("""
-        SELECT COUNT(*) AS total_rows
-        FROM stg_mls
-        WHERE project_id = :project_id
-    """)
-    with engine.begin() as conn:
-        total = conn.execute(q2, {"project_id": project_id}).fetchone()[0]
-
-    st.metric("Total de linhas no projeto", int(total))
-
-# =========================
-# TAB 3 — OVERVIEW
-# =========================
-with tabs[2]:
-    st.subheader("📈 Overview — Investor Grade (base)")
-
-    q = text("""
-        SELECT *
-        FROM stg_mls
-        WHERE project_id = :project_id
-    """)
-    with engine.begin() as conn:
-        df = pd.read_sql(q, conn, params={"project_id": project_id})
+if st.button("Carregar dados"):
+    df = load_data(project_id)
 
     if df.empty:
-        st.warning("Nenhum dado no banco para este project_id. Vá em Upload e processe arquivos.")
-        st.stop()
+        st.warning("Nenhum dado encontrado para este projeto.")
+    else:
+        st.success(f"{len(df)} registros carregados com sucesso.")
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Total", len(df))
-    c2.metric("Sold", int((df["status_norm"] == "SOLD").sum()))
-    c3.metric("Active", int((df["status_norm"] == "ACTIVE").sum()))
-    c4.metric("Pending", int((df["status_norm"] == "PENDING").sum()))
-    c5.metric("Land/Rental", int(((df["status_norm"] == "LAND") | (df["status_norm"] == "RENTAL")).sum()))
+        st.subheader("📋 Prévia dos Dados")
+        st.dataframe(df.head(100), use_container_width=True)
 
-    st.markdown("### Preview (últimas 200 linhas)")
-    st.dataframe(df.tail(200), use_container_width=True)
+        st.subheader("📊 Distribuição por Status")
+        if "status" in df.columns:
+            st.dataframe(
+                df["status"].value_counts().reset_index().rename(
+                    columns={"index": "Status", "status": "Quantidade"}
+                )
+            )
+        else:
+            st.warning("Coluna 'status' não encontrada.")
+
+        st.subheader("📈 Estatísticas Básicas")
+        st.dataframe(df.describe(include="all"))
+
+# ======================================================
+# RODAPÉ
+# ======================================================
+st.markdown("---")
+st.caption("Market Lens · Pipeline estável · Pronto para evolução")
