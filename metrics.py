@@ -1,46 +1,72 @@
 import pandas as pd
+from sqlalchemy import text
 
-# ============================
-# LOAD DATA (SAFE)
-# ============================
 
-def read_stg(engine, project_id: str):
+# ===========================
+# UTILS
+# ===========================
+
+def table_has_column(engine, table_name: str, column_name: str) -> bool:
     query = """
-        SELECT *
-        FROM stg_mls
-        WHERE project_id = :project_id
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = :table
+          AND column_name = :column
+        LIMIT 1
     """
     with engine.begin() as conn:
-        return pd.read_sql(query, conn, params={"project_id": project_id})
+        res = conn.execute(query, {"table": table_name, "column": column_name}).fetchone()
+    return res is not None
 
 
-# ============================
-# CLASSIFICATION LOGIC
-# ============================
+# ===========================
+# LOAD DATA SAFELY
+# ===========================
+
+def read_stg(engine, project_id: str):
+    """
+    Carrega dados da stg_mls com fallback automático
+    se a coluna project_id não existir.
+    """
+
+    has_project_id = table_has_column(engine, "stg_mls", "project_id")
+
+    if has_project_id:
+        sql = """
+            SELECT *
+            FROM stg_mls
+            WHERE project_id = :project_id
+        """
+        params = {"project_id": project_id}
+    else:
+        # fallback — tabela não possui project_id
+        sql = "SELECT * FROM stg_mls"
+        params = {}
+
+    with engine.begin() as conn:
+        return pd.read_sql(sql, conn, params=params)
+
+
+# ===========================
+# CLASSIFICAÇÃO DE STATUS
+# ===========================
 
 def classify_rows(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Cria coluna 'category' a partir de texto livre (status, property_type etc)
-    """
     def classify(row):
-        txt = " ".join(
-            str(v).upper()
-            for v in [
-                row.get("status", ""),
-                row.get("property_type", ""),
-                row.get("property_sub_type", "")
-            ]
-        )
+        text = " ".join([
+            str(row.get("status", "")),
+            str(row.get("property_type", "")),
+        ]).upper()
 
-        if "SOLD" in txt or "CLOSED" in txt:
+        if "SOLD" in text or "CLOSED" in text:
             return "Sold"
-        if "ACTIVE" in txt:
+        if "ACTIVE" in text:
             return "Listings"
-        if "PENDING" in txt:
+        if "PENDING" in text:
             return "Pending"
-        if "RENT" in txt:
+        if "RENT" in text:
             return "Rental"
-        if "LAND" in txt or "LOT" in txt:
+        if "LAND" in text or "LOT" in text:
             return "Land"
         return "Other"
 
@@ -49,9 +75,9 @@ def classify_rows(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# ============================
-# METRICS
-# ============================
+# ===========================
+# COUNTS
+# ===========================
 
 def table_row_counts(df: pd.DataFrame):
     return (
@@ -61,6 +87,10 @@ def table_row_counts(df: pd.DataFrame):
         .sort_values("rows", ascending=False)
     )
 
+
+# ===========================
+# METRICS
+# ===========================
 
 def weighted_avg(series, weights):
     series = pd.to_numeric(series, errors="coerce")
@@ -74,16 +104,15 @@ def weighted_avg(series, weights):
 
 
 def investor_grade_overview(df: pd.DataFrame):
-    rows = []
+    metrics = []
 
-    def add(label, col):
-        if col not in df.columns:
-            return
-        val = weighted_avg(df[col], df.get("sqft"))
-        rows.append({
-            "metric": label,
-            "weighted_avg": val
-        })
+    def add(name, col):
+        if col in df.columns:
+            val = weighted_avg(df[col], df.get("sqft"))
+            metrics.append({
+                "metric": name,
+                "weighted_avg": val
+            })
 
     add("Sold Price", "sold_price")
     add("Price per Sqft", "ppsqft")
@@ -91,4 +120,4 @@ def investor_grade_overview(df: pd.DataFrame):
     add("Beds", "beds")
     add("Baths", "baths")
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(metrics)
