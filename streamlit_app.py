@@ -4,6 +4,15 @@ import streamlit as st
 import pandas as pd
 from sqlalchemy import text
 
+import streamlit as st
+from db import get_engine
+
+st.write("Iniciando app...")
+
+engine = get_engine()
+
+st.success("Banco conectado com sucesso!")
+
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 if CURRENT_DIR not in sys.path:
     sys.path.insert(0, CURRENT_DIR)
