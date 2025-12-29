@@ -1,352 +1,139 @@
-import re
-import pandas as pd
 import streamlit as st
-from sqlalchemy import text, inspect
 from db import get_engine
+from metrics import (
+    read_stg,
+    table_row_counts,
+    missingness_report,
+    duplicates_report,
+    outliers_report,
+    investor_grade_overview,
+    monthly_snapshot_weighted
+)
 
 # =========================
 # CONFIG (TEM QUE SER PRIMEIRO)
 # =========================
 st.set_page_config(page_title="Market Lens", layout="wide")
-
-st.title("📊 Market Lens — Upload de Dados (Staging)")
+st.title("📊 Market Lens")
 
 # =========================
-# HELPERS
+# Sidebar
 # =========================
+st.sidebar.header("Configuração")
+project_id = st.sidebar.text_input("Project ID", value="default_project")
 
-MAX_FILES = 12
+st.sidebar.caption("Nesta fase, usamos stg_mls. Próximo passo: fact_* + dimensões (modelo final).")
 
-def guess_category_from_filename(filename: str) -> str:
-    """
-    Tenta identificar a categoria a partir do nome do arquivo.
-    Você pode melhorar as regras depois.
-    """
-    name = filename.lower()
+# =========================
+# DB connect
+# =========================
+try:
+    engine = get_engine()
+    st.success("Banco conectado com sucesso ✅")
+except Exception as e:
+    st.error("Erro ao conectar no banco ❌")
+    st.code(str(e))
+    st.stop()
 
-    if "land" in name:
-        return "Land"
-    if "rental" in name or "rent" in name:
-        return "Rental"
-    if "pending" in name or "pendings" in name or "pnd" in name:
-        return "Pendings"
-    if "sold" in name or "sld" in name:
-        return "Sold"
-    if "listing" in name or "listings" in name or "act" in name:
-        return "Listings"
-    if "propriedade" in name or "propriedades" in name:
-        # normalmente esse arquivo é um mix — você pode escolher como tratar
-        # aqui vamos mandar pra Listings por padrão, mas você pode mudar.
-        return "Listings"
+# =========================
+# Tabs
+# =========================
+tab_overview, tab_diagnostics = st.tabs(["Overview", "Diagnostics"])
 
-    return "Listings"
+# =========================
+# OVERVIEW
+# =========================
+with tab_overview:
+    st.subheader("Overview (Investor Grade) — com MÉDIA PONDERADA onde faz sentido")
 
+    st.write("Resumo de linhas por categoria (project_id):")
+    st.dataframe(table_row_counts(engine, project_id), use_container_width=True)
 
-def sanitize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Normaliza nomes de colunas vindas do Excel.
-    """
-    df = df.copy()
-    df.columns = (
-        df.columns.astype(str)
-        .str.strip()
-        .str.lower()
-        .str.replace(r"\s+", "_", regex=True)
-        .str.replace("-", "_")
-        .str.replace("/", "_")
-        .str.replace(r"[^a-z0-9_]+", "", regex=True)
+    st.divider()
+
+    # Base para o Overview: SOLD (melhor para métricas de mercado)
+    df_sold = read_stg(engine, project_id, categories=["Sold"])
+
+    st.markdown("### Cards (P25 / Median / P75 + Weighted Avg)")
+    cards = investor_grade_overview(df_sold)
+
+    if cards.empty:
+        st.info("Sem dados em SOLD para este project_id (ou ainda não importou SOLD).")
+    else:
+        st.dataframe(cards, use_container_width=True)
+
+    st.divider()
+    st.markdown("### Market Snapshot (12m) — MoM/YoY (média ponderada por mês)")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.markdown("**Sold Price (weighted avg)**")
+        snap_price = monthly_snapshot_weighted(df_sold, "sold_price", "sqft")
+        st.dataframe(snap_price.tail(24), use_container_width=True)
+
+    with col2:
+        st.markdown("**$/Sqft (weighted avg)**")
+        snap_ppsqft = monthly_snapshot_weighted(df_sold, "ppsqft", "sqft")
+        st.dataframe(snap_ppsqft.tail(24), use_container_width=True)
+
+    with col3:
+        st.markdown("**ADOM (weighted avg)**")
+        snap_adom = monthly_snapshot_weighted(df_sold, "adom", "sqft")
+        st.dataframe(snap_adom.tail(24), use_container_width=True)
+
+    st.divider()
+    st.markdown("### Notas (importante)")
+    st.write(
+        "- **Peso padrão = sqft** (se faltar sqft, o peso vira 1).\n"
+        "- Isso evita distorções por propriedades muito grandes/pequenas.\n"
+        "- Na próxima fase, vamos implementar os **presets de segmento** (SFR, Condo, Mobile, 2015+, Builder Box)\n"
+        "  e mover tudo para `fact_sold`, `fact_listings`, `fact_land`, `fact_rental`."
     )
-    return df
-
-
-def map_common_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Mapeia colunas comuns de MLS -> schema do stg_mls.
-    Se uma coluna não existir, tudo bem.
-    """
-    df = df.copy()
-
-    # mapeamentos comuns (adicione mais quando quiser)
-    rename_map = {
-        "#": "row_no",
-        "ml_number": "mls_id",
-        "mls_number": "mls_id",
-        "mls": "mls_id",
-        "listing_number": "mls_id",
-        "address": "address",
-        "street_name": "street",
-        "street": "street",
-        "city": "city",
-        "state": "state",
-        "zip": "zipcode",
-        "zip_code": "zipcode",
-        "zipcode": "zipcode",
-        "county": "county",
-        "legal_subdivision_name": "subdivision",
-        "subdivision": "subdivision",
-        "subdivision_condo_name": "subdivision",
-        "heated_area": "sqft",
-        "living_area": "sqft",
-        "sq_ft": "sqft",
-        "sqft": "sqft",
-        "lot_size": "lot_sqft",
-        "lot_sqft": "lot_sqft",
-        "total_acreage": "total_acreage",  # se não existir no banco, será filtrado depois
-        "current_price": "list_price",
-        "list_price": "list_price",
-        "sold_price": "sold_price",
-        "close_price": "sold_price",
-        "beds": "beds",
-        "bedrooms": "beds",
-        "full_baths": "baths",
-        "baths_full": "baths",
-        "baths": "baths",
-        "garage": "garage",
-        "pool": "pool",
-        "year_built": "year_built",
-        "dom": "dom",
-        "adom": "adom",
-        "cdom": "cdom",
-        "list_date": "list_date",
-        "pending_date": "pending_date",
-        "sold_date": "sold_date",
-        "sold_terms": "financing",
-        "financing": "financing",
-        "list_agent": "list_agent",
-        "listing_agent": "list_agent",
-        "sell_agent": "sell_agent",
-        "selling_agent": "sell_agent",
-        "latitude": "latitude",
-        "longitude": "longitude",
-        "lat": "latitude",
-        "lng": "longitude",
-    }
-
-    for c in list(df.columns):
-        if c in rename_map and rename_map[c] != c:
-            df = df.rename(columns={c: rename_map[c]})
-
-    return df
-
-
-def ensure_month_key(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Cria month_key = YYYY-MM-01 para análises MoM/YoY depois.
-    Regra simples:
-      - Sold -> usa sold_date
-      - Pending -> usa pending_date
-      - Listings -> usa list_date
-      - fallback: hoje
-    """
-    df = df.copy()
-
-    # tenta converter datas se existirem
-    for col in ["list_date", "pending_date", "sold_date"]:
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
-
-    # cria month_key se faltar
-    if "month_key" not in df.columns:
-        df["month_key"] = pd.NaT
-
-    # prioriza sold_date, depois pending_date, depois list_date
-    if "sold_date" in df.columns:
-        sold_dt = pd.to_datetime(df["sold_date"], errors="coerce")
-        df.loc[df["month_key"].isna(), "month_key"] = sold_dt.dt.to_period("M").dt.to_timestamp().dt.date
-
-    if "pending_date" in df.columns:
-        pnd_dt = pd.to_datetime(df["pending_date"], errors="coerce")
-        df.loc[df["month_key"].isna(), "month_key"] = pnd_dt.dt.to_period("M").dt.to_timestamp().dt.date
-
-    if "list_date" in df.columns:
-        lst_dt = pd.to_datetime(df["list_date"], errors="coerce")
-        df.loc[df["month_key"].isna(), "month_key"] = lst_dt.dt.to_period("M").dt.to_timestamp().dt.date
-
-    # fallback: mês atual
-    today = pd.Timestamp.today()
-    df.loc[df["month_key"].isna(), "month_key"] = today.to_period("M").to_timestamp().date()
-
-    return df
-
-
-def cast_types(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Converte tipos básicos sem quebrar.
-    """
-    df = df.copy()
-
-    numeric_cols = [
-        "beds", "baths", "garage", "sqft", "lot_sqft",
-        "list_price", "sold_price", "dom", "adom", "cdom",
-        "latitude", "longitude", "sp_lp", "ppsqft", "total_acreage"
-    ]
-    for col in numeric_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    if "pool" in df.columns:
-        # aceita True/False, Y/N, Yes/No, 1/0
-        df["pool"] = df["pool"].astype(str).str.strip().str.lower().map(
-            {"true": True, "false": False, "y": True, "n": False, "yes": True, "no": False, "1": True, "0": False}
-        )
-
-    if "year_built" in df.columns:
-        df["year_built"] = pd.to_numeric(df["year_built"], errors="coerce").astype("Int64")
-
-    # calcula sp_lp e ppsqft quando possível
-    if "sold_price" in df.columns and "list_price" in df.columns:
-        df["sp_lp"] = df["sold_price"] / df["list_price"]
-
-    if "sqft" in df.columns:
-        if "sold_price" in df.columns:
-            df["ppsqft"] = df["sold_price"] / df["sqft"]
-        elif "list_price" in df.columns:
-            df["ppsqft"] = df["list_price"] / df["sqft"]
-
-    return df
-
-
-def filter_to_db_columns(df: pd.DataFrame, engine) -> pd.DataFrame:
-    """
-    NÃO deixa o insert quebrar:
-    mantém somente colunas que existem na tabela stg_mls.
-    """
-    insp = inspect(engine)
-    db_cols = set([c["name"] for c in insp.get_columns("stg_mls")])
-
-    keep = [c for c in df.columns if c in db_cols]
-    dropped = [c for c in df.columns if c not in db_cols]
-
-    return df[keep], dropped
-
-
-def delete_previous_category(engine, project_id: str, category: str):
-    """
-    Evita duplicação: apaga registros antigos do mesmo project + category.
-    """
-    with engine.begin() as conn:
-        conn.execute(
-            text("""
-                DELETE FROM stg_mls
-                WHERE project_id = :project_id
-                  AND category = :category
-            """),
-            {"project_id": project_id, "category": category}
-        )
-
-
-def count_rows_by_category(engine, project_id: str):
-    with engine.begin() as conn:
-        rows = conn.execute(
-            text("""
-                SELECT category, COUNT(*) as n
-                FROM stg_mls
-                WHERE project_id = :project_id
-                GROUP BY category
-                ORDER BY category
-            """),
-            {"project_id": project_id}
-        ).fetchall()
-    return rows
-
 
 # =========================
-# UI
+# DIAGNOSTICS
 # =========================
+with tab_diagnostics:
+    st.subheader("Diagnostics (Qualidade dos Dados)")
 
-st.subheader("1) Upload (até 12 arquivos)")
-uploaded_files = st.file_uploader(
-    "Selecione um ou mais arquivos Excel (.xlsx)",
-    type=["xlsx"],
-    accept_multiple_files=True
-)
+    st.write("Contagem por categoria:")
+    st.dataframe(table_row_counts(engine, project_id), use_container_width=True)
 
-st.subheader("2) Identificação do projeto")
-project_id = st.text_input("Project ID", value="default_project")
+    st.divider()
 
-st.subheader("3) Categoria (opcional)")
-st.caption("Você pode escolher uma categoria fixa, ou deixar o sistema detectar pelo nome do arquivo.")
-mode = st.radio("Como definir categoria?", ["Detectar pelo nome do arquivo (recomendado)", "Escolher manualmente"], index=0)
+    category_diag = st.selectbox("Escolha uma categoria para diagnosticar", ["Listings", "Pendings", "Sold", "Land", "Rental"])
+    df = read_stg(engine, project_id, categories=[category_diag])
 
-manual_category = None
-if mode == "Escolher manualmente":
-    manual_category = st.selectbox("Categoria fixa para TODOS os arquivos", ["Listings", "Pendings", "Sold", "Land", "Rental"])
+    st.markdown(f"### Preview — {category_diag}")
+    st.write(f"Linhas: **{len(df)}**")
+    st.dataframe(df.head(25), use_container_width=True)
 
-st.divider()
+    st.divider()
+    st.markdown("### Missingness (% vazio por coluna)")
+    miss = missingness_report(df)
+    st.dataframe(miss.head(50), use_container_width=True)
 
-# =========================
-# RUN IMPORT
-# =========================
-if uploaded_files:
-    if len(uploaded_files) > MAX_FILES:
-        st.error(f"Você selecionou {len(uploaded_files)} arquivos. O máximo é {MAX_FILES}.")
-        st.stop()
+    st.divider()
+    st.markdown("### Duplicidade (mls_id + address)")
+    dups = duplicates_report(df)
+    if dups.empty:
+        st.success("Nenhuma duplicidade detectada (ou colunas ausentes).")
+    else:
+        st.warning("Duplicidades detectadas:")
+        st.dataframe(dups, use_container_width=True)
 
-    # conecta no banco
-    try:
-        engine = get_engine()
-        st.success("Banco conectado com sucesso ✅")
-    except Exception as e:
-        st.error("Erro ao conectar no banco ❌")
-        st.code(str(e))
-        st.stop()
+    st.divider()
+    st.markdown("### Outliers (regras simples)")
+    out = outliers_report(df)
+    st.dataframe(out, use_container_width=True)
 
-    if st.button("📥 Importar TODOS para o banco (stg_mls)"):
-        for f in uploaded_files:
-            category = manual_category if manual_category else guess_category_from_filename(f.name)
-
-            st.write("")
-            st.markdown(f"### 📄 Processando: `{f.name}`  → **{category}**")
-
-            try:
-                df = pd.read_excel(f, engine="openpyxl")
-                st.info(f"Linhas lidas do Excel: **{len(df)}**")
-
-                df = sanitize_columns(df)
-                df = map_common_columns(df)
-                df = ensure_month_key(df)
-                df = cast_types(df)
-
-                # adiciona campos obrigatórios
-                df["project_id"] = project_id
-                df["category"] = category
-
-                # evita duplicação: limpa project+category antes
-                delete_previous_category(engine, project_id, category)
-
-                # filtra colunas para não quebrar no insert
-                df_to_insert, dropped = filter_to_db_columns(df, engine)
-
-                if len(df_to_insert.columns) == 0:
-                    st.error("Nenhuma coluna do Excel corresponde ao schema do banco (stg_mls).")
-                    st.write("Colunas do arquivo:", list(df.columns))
-                    continue
-
-                # insere
-                df_to_insert.to_sql(
-                    "stg_mls",
-                    engine,
-                    if_exists="append",
-                    index=False,
-                    method="multi"
-                )
-
-                st.success(f"✅ Importado com sucesso: {f.name}")
-                st.write(f"Colunas inseridas: {len(df_to_insert.columns)}")
-                if dropped:
-                    st.caption(f"Colunas ignoradas (não existem no banco): {', '.join(dropped[:25])}" + (" ..." if len(dropped) > 25 else ""))
-
-            except Exception as e:
-                st.error(f"❌ Erro ao importar {f.name}")
-                st.code(str(e))
-
-        st.divider()
-        st.subheader("Resumo no banco (stg_mls) por categoria")
-        rows = count_rows_by_category(engine, project_id)
-        if rows:
-            st.dataframe(pd.DataFrame(rows, columns=["category", "rows"]))
-        else:
-            st.info("Nenhum registro encontrado para este project_id.")
-
-else:
-    st.info("Envie arquivos para começar. Depois clique em **Importar TODOS**.")
+    st.divider()
+    st.markdown("### Próximo passo")
+    st.write(
+        "Agora que temos ingestão + diagnostics + overview, o próximo passo é criar:\n"
+        "1) **ZIP Compare** (medianas/quartis + MoM/YoY por ZIP)\n"
+        "2) **Top 25 Realtors** (volume por status + cards com endereços + link Zillow)\n"
+        "3) **Street Analyzer** (2+, 4+, 6+, 10+ vendas)\n"
+        "4) **Underpricing Detector** (score 0–100 + explicação)"
+    )
