@@ -1,21 +1,24 @@
-import streamlit as st
+import os
 from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
 
 def get_engine():
-    # Preferência 1: Streamlit Secrets
-    if "database" in st.secrets and "url" in st.secrets["database"]:
-        url = st.secrets["database"]["url"]
-        return create_engine(url, pool_pre_ping=True)
+    db_url = os.getenv("DATABASE_URL")
 
-    # Preferência 2: env var (caso você use)
-    import os
-    url = os.getenv("SUPABASE_DB_URL")
-    if url:
-        return create_engine(url, pool_pre_ping=True)
+    if not db_url:
+        raise RuntimeError(
+            "DATABASE_URL não configurado. "
+            "Defina a variável no Streamlit Secrets."
+        )
 
-    raise RuntimeError(
-        "Missing Streamlit Secrets.\n"
-        "Configure no Streamlit Cloud > Secrets:\n"
-        "[database]\n"
-        'url = "postgresql://..."\n'
-    )
+    try:
+        engine = create_engine(
+            db_url,
+            pool_pre_ping=True,
+            pool_size=5,
+            max_overflow=10,
+            connect_args={"connect_timeout": 5},
+        )
+        return engine
+    except Exception as e:
+        raise RuntimeError(f"Erro ao criar engine: {str(e)}")
