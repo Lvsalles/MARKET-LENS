@@ -1,73 +1,35 @@
 import streamlit as st
-from sqlalchemy import text
+import pandas as pd
 from db import get_engine
-from ai.gemini_ai import analyze_market
+from etl import normalize_columns, insert_into_staging
 
 st.set_page_config(page_title="Market Lens", layout="wide")
 
-st.title("📊 Market Lens — Inteligência Imobiliária")
+st.title("📊 Market Lens — Data Ingestion")
 
-# ------------------------
-# Conexão com banco
-# ------------------------
-try:
-    engine = get_engine()
-    st.success("Banco conectado com sucesso ✅")
-except Exception as e:
-    st.error("Erro ao conectar no banco")
-    st.code(str(e))
-    st.stop()
+# -----------------------------
+# Upload de arquivo
+# -----------------------------
+uploaded_file = st.file_uploader("Upload MLS file (.xlsx)", type=["xlsx"])
 
-# ------------------------
-# Upload / Seleção
-# ------------------------
-st.sidebar.header("Configurações")
-
-category = st.sidebar.selectbox(
-    "Categoria",
+category = st.selectbox(
+    "Tipo de dados",
     ["Listings", "Pendings", "Sold", "Land", "Rental"]
 )
 
-project_id = st.sidebar.text_input("Project ID", "default_project")
+project_id = st.text_input("Project ID", value="default_project")
 
-# ------------------------
-# Carregar dados
-# ------------------------
-@st.cache_data
-def load_data():
-    query = f"""
-        SELECT *
-        FROM normalized_properties
-        WHERE category = '{category}'
-    """
-    return st.read_sql(query, engine)
+if uploaded_file:
+    df = pd.read_excel(uploaded_file)
+    st.success(f"{len(df)} linhas carregadas")
 
-df = load_data()
+    df = normalize_columns(df)
+    st.dataframe(df.head(10))
 
-if df.empty:
-    st.warning("Nenhum dado encontrado para esta categoria.")
-    st.stop()
-
-st.success(f"{len(df)} registros carregados")
-
-# ------------------------
-# VISÃO GERAL
-# ------------------------
-st.subheader("📊 Visão Geral")
-
-col1, col2, col3 = st.columns(3)
-col1.metric("Registros", len(df))
-col2.metric("Preço médio", f"${df['price'].mean():,.0f}")
-col3.metric("Preço / sqft", f"${(df['price'] / df['sqft']).mean():,.0f}")
-
-# ------------------------
-# IA – ANÁLISE INTELIGENTE
-# ------------------------
-st.divider()
-st.header("🧠 Análise Inteligente (IA)")
-
-if st.button("Gerar análise com IA"):
-    with st.spinner("Analisando dados..."):
-        insight = analyze_market(df)
-        st.markdown("### 📈 Insights do Modelo")
-        st.markdown(insight)
+    if st.button("📥 Importar para o banco"):
+        try:
+            insert_into_staging(df, project_id, category)
+            st.success("Dados inseridos com sucesso!")
+        except Exception as e:
+            st.error("Erro ao salvar no banco")
+            st.code(str(e))
