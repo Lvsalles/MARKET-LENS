@@ -2,71 +2,62 @@ import pandas as pd
 from sqlalchemy import text
 
 
-# ===========================
-# UTILS
-# ===========================
-
+# ============================
+# CHECA SE COLUNA EXISTE
+# ============================
 def table_has_column(engine, table_name: str, column_name: str) -> bool:
-    query = """
+    query = text("""
         SELECT 1
         FROM information_schema.columns
         WHERE table_name = :table
           AND column_name = :column
         LIMIT 1
-    """
+    """)
     with engine.begin() as conn:
-        res = conn.execute(query, {"table": table_name, "column": column_name}).fetchone()
-    return res is not None
+        result = conn.execute(query, {"table": table_name, "column": column_name}).fetchone()
+    return result is not None
 
 
-# ===========================
-# LOAD DATA SAFELY
-# ===========================
-
+# ============================
+# LEITURA SEGURA DO BANCO
+# ============================
 def read_stg(engine, project_id: str):
-    """
-    Carrega dados da stg_mls com fallback automático
-    se a coluna project_id não existir.
-    """
+    has_project = table_has_column(engine, "stg_mls", "project_id")
 
-    has_project_id = table_has_column(engine, "stg_mls", "project_id")
-
-    if has_project_id:
-        sql = """
+    if has_project:
+        sql = text("""
             SELECT *
             FROM stg_mls
             WHERE project_id = :project_id
-        """
+        """)
         params = {"project_id": project_id}
     else:
-        # fallback — tabela não possui project_id
-        sql = "SELECT * FROM stg_mls"
+        sql = text("SELECT * FROM stg_mls")
         params = {}
 
     with engine.begin() as conn:
         return pd.read_sql(sql, conn, params=params)
 
 
-# ===========================
+# ============================
 # CLASSIFICAÇÃO DE STATUS
-# ===========================
-
+# ============================
 def classify_rows(df: pd.DataFrame) -> pd.DataFrame:
     def classify(row):
-        text = " ".join([
+        txt = " ".join([
             str(row.get("status", "")),
             str(row.get("property_type", "")),
         ]).upper()
 
-        if "SOLD" in text or "CLOSED" in text:
+        if "SOLD" in txt or "CLOSED" in txt:
             return "Sold"
-        if "ACTIVE" in text:
+        if "ACTIVE" in txt:
             return "Listings"
-        if "PENDING" in text:
+        if "PENDING" in txt:
             return "Pending"
-        if "RENT" in text:
+        if "RENT" in txt:
             return "Rental"
-        if "LAND" in text or "LOT" in text:
+        if "LAND" in txt:
             return "Land"
         return "Other"
 
@@ -75,10 +66,9 @@ def classify_rows(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# ===========================
-# COUNTS
-# ===========================
-
+# ============================
+# MÉTRICAS
+# ============================
 def table_row_counts(df: pd.DataFrame):
     return (
         df.groupby("category")
@@ -88,31 +78,23 @@ def table_row_counts(df: pd.DataFrame):
     )
 
 
-# ===========================
-# METRICS
-# ===========================
-
 def weighted_avg(series, weights):
     series = pd.to_numeric(series, errors="coerce")
     weights = pd.to_numeric(weights, errors="coerce")
-
     mask = (series.notna()) & (weights.notna()) & (weights > 0)
     if not mask.any():
         return None
-
     return (series[mask] * weights[mask]).sum() / weights[mask].sum()
 
 
 def investor_grade_overview(df: pd.DataFrame):
-    metrics = []
+    results = []
 
-    def add(name, col):
-        if col in df.columns:
-            val = weighted_avg(df[col], df.get("sqft"))
-            metrics.append({
-                "metric": name,
-                "weighted_avg": val
-            })
+    def add(metric, col):
+        if col not in df.columns:
+            return
+        val = weighted_avg(df[col], df.get("sqft"))
+        results.append({"metric": metric, "weighted_avg": val})
 
     add("Sold Price", "sold_price")
     add("Price per Sqft", "ppsqft")
@@ -120,4 +102,4 @@ def investor_grade_overview(df: pd.DataFrame):
     add("Beds", "beds")
     add("Baths", "baths")
 
-    return pd.DataFrame(metrics)
+    return pd.DataFrame(results)
