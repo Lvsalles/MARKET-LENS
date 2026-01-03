@@ -1,42 +1,65 @@
 import streamlit as st
-from sqlalchemy import text
-from db import get_engine
+import pandas as pd
+from db import get_engine, smoke_test
+from etl import insert_staging
 
 st.set_page_config(page_title="Market Lens", layout="wide")
-st.title("📊 Market Lens — Data Explorer")
+st.title("📊 Market Lens — Fase 1 (Foundation)")
 
-# --- CONEXÃO SEGURA ---
+# --------------------
+# Conexão
+# --------------------
 try:
     engine = get_engine()
+    smoke_test(engine)
     st.success("Banco conectado com sucesso ✅")
 except Exception as e:
-    st.error("❌ Erro ao conectar no banco")
+    st.error("Erro de conexão")
     st.code(str(e))
     st.stop()
 
-# --- TESTE DE CONEXÃO REAL ---
-try:
-    with engine.connect() as conn:
-        conn.execute(text("SELECT 1"))
-except Exception as e:
-    st.error("❌ Falha ao executar query no banco")
-    st.code(str(e))
-    st.stop()
+# --------------------
+# Upload
+# --------------------
+st.header("📤 Upload de arquivos (até 12)")
 
-# --- CARREGAR DADOS DE FORMA SEGURA ---
-@st.cache_data
-def load_data():
-    query = "SELECT * FROM stg_mls LIMIT 5000"
-    return pd.read_sql(query, engine)
+project_id = st.text_input("Project ID", value="default_project")
 
-try:
-    df = load_data()
-except Exception as e:
-    st.error("❌ Erro ao carregar dados")
-    st.code(str(e))
-    st.stop()
+dataset_type = st.selectbox(
+    "Tipo de dados",
+    ["properties", "land", "rental"]
+)
 
-# --- VISUALIZAÇÃO ---
-st.subheader("📊 Dados carregados")
-st.write(f"Total de registros: {len(df)}")
-st.dataframe(df.head(50))
+files = st.file_uploader(
+    "Upload XLSX",
+    type=["xlsx"],
+    accept_multiple_files=True
+)
+
+if files and st.button("Importar"):
+    total = 0
+    for f in files:
+        df = pd.read_excel(f)
+        rows = insert_staging(engine, df, project_id, dataset_type)
+        total += rows
+
+    st.success(f"{total} linhas processadas (sem duplicar)")
+
+# --------------------
+# Diagnostics
+# --------------------
+st.header("🧪 Diagnostics")
+
+with engine.connect() as conn:
+    res = conn.execute(
+        """
+        select dataset_type, status, count(*)
+        from stg_raw
+        where project_id = :pid
+        group by dataset_type, status
+        order by dataset_type, status
+        """,
+        {"pid": project_id}
+    ).fetchall()
+
+st.dataframe(res, use_container_width=True)
