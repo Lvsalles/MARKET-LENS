@@ -1,23 +1,14 @@
 import streamlit as st
+from sqlalchemy import create_engine
+import os
 
-st.set_page_config(page_title="Market Lens – Import Test", layout="wide")
+st.set_page_config(page_title="Market Lens – DB Init", layout="wide")
+st.title("🟢 DB Init")
 
-st.title("🧪 TESTE DE IMPORTS")
+DATABASE_URL = st.secrets["DATABASE_URL"]
 
-try:
-    import pandas as pd
-    st.success("pandas OK")
-except Exception as e:
-    st.error(f"pandas ERRO: {e}")
+engine = create_engine(DATABASE_URL)
+st.success("Engine criada com sucesso")
 
-try:
-    import sqlalchemy
-    st.success("sqlalchemy OK")
-except Exception as e:
-    st.error(f"sqlalchemy ERRO: {e}")
-
-try:
-    import psycopg2
-    st.success("psycopg2 OK")
-except Exception as e:
-    st.error(f"psycopg2 ERRO: {e}")
+if st.button("Continuar"):
+    st.write("Nenhuma query executada ainda")
