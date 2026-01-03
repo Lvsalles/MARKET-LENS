@@ -1,51 +1,56 @@
+# streamlit_app.py
+import os
 import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine, text
 
-st.set_page_config(page_title="Market Lens – DB Explorer", layout="wide")
-st.title("🧠 Market Lens – DB Explorer")
-
-DATABASE_URL = st.secrets["DATABASE_URL"]
-engine = create_engine(DATABASE_URL)
-
-st.success("Conectado ao banco com sucesso")
-
-# 1️⃣ Listar schemas
-st.subheader("Schemas disponíveis")
-
-schemas_query = """
-SELECT schema_name
-FROM information_schema.schemata
-ORDER BY schema_name;
-"""
-
-with engine.connect() as conn:
-    schemas = pd.read_sql(text(schemas_query), conn)
-
-st.dataframe(schemas, use_container_width=True)
-
-# 2️⃣ Selecionar schema
-schema = st.selectbox(
-    "Selecione o schema para explorar",
-    schemas["schema_name"].tolist(),
-    index=schemas["schema_name"].tolist().index("public") if "public" in schemas["schema_name"].tolist() else 0
+# --------------------------------------------------
+# CONFIG
+# --------------------------------------------------
+st.set_page_config(
+    page_title="Market Lens — Data Explorer",
+    layout="wide"
 )
 
-# 3️⃣ Listar tabelas do schema
-st.subheader(f"Tabelas no schema `{schema}`")
+st.title("📊 Market Lens — Data Explorer")
 
-tables_query = """
-SELECT table_name
-FROM information_schema.tables
-WHERE table_schema = :schema
-ORDER BY table_name;
-"""
+# --------------------------------------------------
+# DATABASE URL
+# --------------------------------------------------
+DATABASE_URL = st.secrets.get("DATABASE_URL") or os.getenv("DATABASE_URL")
 
-with engine.connect() as conn:
-    tables = pd.read_sql(text(tables_query), conn, params={"schema": schema})
+if not DATABASE_URL:
+    st.error("❌ DATABASE_URL não configurado.")
+    st.stop()
 
-st.dataframe(tables, use_container_width=True)
+# --------------------------------------------------
+# ENGINE
+# --------------------------------------------------
+@st.cache_resource
+def get_engine():
+    return create_engine(DATABASE_URL, pool_pre_ping=True)
 
-# 4️⃣ Selecionar tabela
-if not tables.empty:
-    table = st.se
+engine = get_engine()
+st.success("✅ Conectado ao banco com sucesso")
+
+# --------------------------------------------------
+# SCHEMAS
+# --------------------------------------------------
+@st.cache_data
+def get_schemas():
+    q = """
+        SELECT schema_name
+        FROM information_schema.schemata
+        ORDER BY schema_name;
+    """
+    with engine.connect() as conn:
+        return pd.read_sql(text(q), conn)
+
+schemas_df = get_schemas()
+
+st.subheader("Schemas disponíveis")
+st.dataframe(schemas_df, use_container_width=True)
+
+schema = st.selectbox(
+    "Selecione o schema para explorar",
+    schemas_df["schema_nam_]()_
