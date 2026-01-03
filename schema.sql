@@ -1,33 +1,62 @@
 -- =========================
--- PROJECTS
+-- STAGING TABLE (MLS RAW)
 -- =========================
-create table if not exists projects (
-  project_id text primary key,
-  created_at timestamptz default now()
+
+create table if not exists public.stg_mls (
+    id bigserial primary key,
+
+    project_id text not null,
+
+    -- Identificação
+    mls_number text,
+    address text,
+    city text,
+    zip text,
+    county text,
+    subdivision text,
+
+    -- Tipo e status
+    property_type text,
+    status text,
+    status_norm text,
+
+    -- Preço
+    current_price numeric,
+    original_price numeric,
+    sold_price numeric,
+
+    -- Dimensões
+    heated_area numeric,
+    lot_size numeric,
+
+    -- Características
+    beds numeric,
+    full_baths numeric,
+    half_baths numeric,
+    year_built integer,
+    garage_spaces integer,
+    pool boolean,
+
+    -- Mercado
+    adom integer,
+    cdom integer,
+    sp_lp numeric,
+
+    -- Datas
+    list_date date,
+    pending_date date,
+    sold_date date,
+
+    -- Geografia (futuro Google Maps)
+    latitude numeric,
+    longitude numeric,
+
+    -- Controle
+    created_at timestamp default now()
 );
 
--- =========================
--- UPLOAD LOG
--- =========================
-create table if not exists uploads (
-  upload_id uuid default gen_random_uuid() primary key,
-  project_id text references projects(project_id),
-  dataset_type text check (dataset_type in ('properties','land','rental')),
-  filename text,
-  rows_loaded int,
-  created_at timestamptz default now()
-);
+create index if not exists idx_stg_mls_project
+on public.stg_mls(project_id);
 
--- =========================
--- STAGING (RAW DATA)
--- =========================
-create table if not exists stg_raw (
-  raw_id uuid default gen_random_uuid() primary key,
-  project_id text,
-  dataset_type text,
-  status text,
-  data jsonb,
-  natural_key text,
-  created_at timestamptz default now(),
-  unique (project_id, dataset_type, natural_key)
-);
+create index if not exists idx_stg_mls_status
+on public.stg_mls(status_norm);
