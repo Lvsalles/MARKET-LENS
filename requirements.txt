@@ -1,7 +1,7 @@
-streamlit==1.41.1
-pandas==2.2.3
-numpy==2.2.1
-sqlalchemy==2.0.36
-psycopg2-binary==2.9.10
-openpyxl==3.1.5
-python-dateutil==2.9.0.post0
+streamlit>=1.30.0
+pandas>=2.1.0
+sqlalchemy>=2.0.20
+psycopg2-binary>=2.9.9
+python-dateutil
+numpy
+google-generativeai
