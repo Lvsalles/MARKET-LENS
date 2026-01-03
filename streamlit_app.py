@@ -83,4 +83,4 @@ def load_tables(schema_name):
 
 tables_df = load_tables(schema)
 
-st.subheader(f"Tabelas no schema `{schema}`
+st.subheader(f"Tabelas no schema `{schema}`")
