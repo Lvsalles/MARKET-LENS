@@ -1,24 +1,29 @@
 import os
-from sqlalchemy import create_engine
-from sqlalchemy.exc import SQLAlchemyError
+import streamlit as st
+from sqlalchemy import create_engine, text
+
+def get_database_url():
+    if "DATABASE_URL" in st.secrets:
+        url = st.secrets["DATABASE_URL"]
+    else:
+        url = os.getenv("DATABASE_URL")
+
+    if not url:
+        raise RuntimeError("DATABASE_URL não configurado")
+
+    if "sslmode=" not in url:
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}sslmode=require"
+
+    return url
 
 def get_engine():
-    db_url = os.getenv("DATABASE_URL")
+    return create_engine(
+        get_database_url(),
+        pool_pre_ping=True,
+        pool_recycle=1800
+    )
 
-    if not db_url:
-        raise RuntimeError(
-            "DATABASE_URL não configurado. "
-            "Defina a variável no Streamlit Secrets."
-        )
-
-    try:
-        engine = create_engine(
-            db_url,
-            pool_pre_ping=True,
-            pool_size=5,
-            max_overflow=10,
-            connect_args={"connect_timeout": 5},
-        )
-        return engine
-    except Exception as e:
-        raise RuntimeError(f"Erro ao criar engine: {str(e)}")
+def smoke_test(engine):
+    with engine.connect() as conn:
+        conn.execute(text("select 1"))
