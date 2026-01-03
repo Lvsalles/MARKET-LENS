@@ -1,43 +1,33 @@
-DROP TABLE IF EXISTS stg_mls;
+-- =========================
+-- PROJECTS
+-- =========================
+create table if not exists projects (
+  project_id text primary key,
+  created_at timestamptz default now()
+);
 
-CREATE TABLE stg_mls (
-    id SERIAL PRIMARY KEY,
+-- =========================
+-- UPLOAD LOG
+-- =========================
+create table if not exists uploads (
+  upload_id uuid default gen_random_uuid() primary key,
+  project_id text references projects(project_id),
+  dataset_type text check (dataset_type in ('properties','land','rental')),
+  filename text,
+  rows_loaded int,
+  created_at timestamptz default now()
+);
 
-    -- Controle
-    project_id TEXT NOT NULL,
-    source_file TEXT,
-    category TEXT NOT NULL,   -- 'properties', 'land', 'rental'
-
-    -- Identificação MLS
-    ml_number TEXT,
-    status TEXT,
-
-    -- Endereço
-    address TEXT,
-    city TEXT,
-    zipcode TEXT,
-    subdivision TEXT,
-
-    -- Características
-    beds INTEGER,
-    full_baths INTEGER,
-    half_baths INTEGER,
-    sqft NUMERIC,
-    year_built INTEGER,
-
-    -- Valores
-    list_price NUMERIC,
-    sold_price NUMERIC,
-    rent_price NUMERIC,
-
-    -- Métricas
-    dom INTEGER,
-    adom INTEGER,
-
-    -- Datas
-    list_date DATE,
-    sold_date DATE,
-
-    -- Metadados
-    created_at TIMESTAMP DEFAULT NOW()
+-- =========================
+-- STAGING (RAW DATA)
+-- =========================
+create table if not exists stg_raw (
+  raw_id uuid default gen_random_uuid() primary key,
+  project_id text,
+  dataset_type text,
+  status text,
+  data jsonb,
+  natural_key text,
+  created_at timestamptz default now(),
+  unique (project_id, dataset_type, natural_key)
 );
