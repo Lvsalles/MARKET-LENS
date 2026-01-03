@@ -1,23 +1,51 @@
 import streamlit as st
+import pandas as pd
 from sqlalchemy import create_engine, text
 
-st.set_page_config(page_title="Market Lens – DB Probe", layout="wide")
-st.title("🟢 DB Probe")
+st.set_page_config(page_title="Market Lens – DB Explorer", layout="wide")
+st.title("🧠 Market Lens – DB Explorer")
 
-# 1️⃣ Lê a string do banco direto dos Secrets
 DATABASE_URL = st.secrets["DATABASE_URL"]
-
-# 2️⃣ Cria a engine
 engine = create_engine(DATABASE_URL)
-st.success("Engine criada com sucesso")
 
-# 3️⃣ Botão para testar query mínima
-if st.button("Executar SELECT 1"):
-    try:
-        with engine.connect() as conn:
-            result = conn.execute(text("SELECT 1")).fetchone()
-        st.success("Query executada com sucesso")
-        st.write(result)
-    except Exception as e:
-        st.error("Erro ao executar query")
-        st.exception(e)
+st.success("Conectado ao banco com sucesso")
+
+# 1️⃣ Listar schemas
+st.subheader("Schemas disponíveis")
+
+schemas_query = """
+SELECT schema_name
+FROM information_schema.schemata
+ORDER BY schema_name;
+"""
+
+with engine.connect() as conn:
+    schemas = pd.read_sql(text(schemas_query), conn)
+
+st.dataframe(schemas, use_container_width=True)
+
+# 2️⃣ Selecionar schema
+schema = st.selectbox(
+    "Selecione o schema para explorar",
+    schemas["schema_name"].tolist(),
+    index=schemas["schema_name"].tolist().index("public") if "public" in schemas["schema_name"].tolist() else 0
+)
+
+# 3️⃣ Listar tabelas do schema
+st.subheader(f"Tabelas no schema `{schema}`")
+
+tables_query = """
+SELECT table_name
+FROM information_schema.tables
+WHERE table_schema = :schema
+ORDER BY table_name;
+"""
+
+with engine.connect() as conn:
+    tables = pd.read_sql(text(tables_query), conn, params={"schema": schema})
+
+st.dataframe(tables, use_container_width=True)
+
+# 4️⃣ Selecionar tabela
+if not tables.empty:
+    table = st.se
