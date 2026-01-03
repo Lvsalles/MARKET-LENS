@@ -1,63 +1,45 @@
 import pandas as pd
+import hashlib
 from sqlalchemy import text
 
-def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+def normalize_columns(df):
     df.columns = (
         df.columns
         .str.strip()
         .str.lower()
         .str.replace(" ", "_")
-        .str.replace("/", "_")
     )
     return df
 
+def build_natural_key(row):
+    base = "|".join(str(v) for v in row.values)
+    return hashlib.md5(base.encode()).hexdigest()
 
-def detect_category(filename: str) -> str:
-    name = filename.lower()
-    if "land" in name:
-        return "land"
-    if "rent" in name or "rental" in name:
-        return "rental"
-    return "properties"
-
-
-def load_excel_to_db(engine, filepath: str, project_id: str):
-    df = pd.read_excel(filepath)
+def insert_staging(engine, df, project_id, dataset_type):
     df = normalize_columns(df)
 
-    category = detect_category(filepath)
-    df["category"] = category
-    df["project_id"] = project_id
+    if "status" not in df.columns:
+        df["status"] = None
 
-    # Mapeamento defensivo
-    rename_map = {
-        "list_price": "list_price",
-        "price": "list_price",
-        "sold_price": "sold_price",
-        "close_price": "sold_price",
-        "beds": "beds",
-        "bedrooms": "beds",
-        "baths": "full_baths",
-        "bathrooms": "full_baths",
-        "sqft": "sqft",
-        "living_area": "sqft",
-        "year_built": "year_built",
-        "status": "status",
-        "address": "address",
-        "city": "city",
-        "zip": "zipcode",
-        "mls_number": "ml_number"
-    }
+    df["natural_key"] = df.apply(build_natural_key, axis=1)
 
-    df.rename(columns=rename_map, inplace=True)
+    rows = []
+    for _, r in df.iterrows():
+        rows.append({
+            "project_id": project_id,
+            "dataset_type": dataset_type,
+            "status": r.get("status"),
+            "data": r.drop(["natural_key"]).to_dict(),
+            "natural_key": r["natural_key"]
+        })
 
-    keep_cols = [
-        "project_id", "category", "ml_number", "status",
-        "address", "city", "zipcode",
-        "beds", "full_baths", "sqft",
-        "year_built", "list_price", "sold_price"
-    ]
+    sql = text("""
+        insert into stg_raw (project_id, dataset_type, status, data, natural_key)
+        values (:project_id, :dataset_type, :status, :data::jsonb, :natural_key)
+        on conflict (project_id, dataset_type, natural_key) do nothing
+    """)
 
-    df = df[[c for c in keep_cols if c in df.columns]]
+    with engine.begin() as conn:
+        conn.execute(sql, rows)
 
-    df.to_sql("stg_mls", engine, if_exists="append", index=False)
+    return len(rows)
