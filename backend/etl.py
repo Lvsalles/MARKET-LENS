@@ -1,20 +1,23 @@
 # backend/etl.py
 from __future__ import annotations
 
-import json
 import uuid
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import pandas as pd
-from sqlalchemy import text, inspect
+from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
 from backend.db import get_engine
 from backend.contracts.mls_classify import classify_xlsx
 
+
+# =========================================================
+# Result object
+# =========================================================
 
 @dataclass
 class ETLResult:
@@ -25,13 +28,13 @@ class ETLResult:
     error: Optional[str] = None
 
 
-# -----------------------------
-# Helpers: schema-safe inserts
-# -----------------------------
+# =========================================================
+# Helpers — schema-aware (NO ASSUMPTIONS)
+# =========================================================
 
-def _table_columns(engine: Engine, table_name: str, schema: str = "public") -> set[str]:
-    insp = inspect(engine)
-    cols = insp.get_columns(table_name, schema=schema)
+def _get_table_columns(engine: Engine, table_name: str, schema: str = "public") -> set[str]:
+    inspector = inspect(engine)
+    cols = inspector.get_columns(table_name, schema=schema)
     return {c["name"] for c in cols}
 
 
@@ -39,35 +42,36 @@ def _safe_insert_one(
     engine: Engine,
     table: str,
     payload: Dict[str, Any],
-    conflict_cols: Optional[Tuple[str, ...]] = None,
+    conflict_cols: Optional[tuple[str, ...]] = None,
     schema: str = "public",
 ) -> bool:
     """
-    Inserts only keys that exist as real columns in Postgres.
-    Returns True if executed (or would be a no-op due to conflict).
+    Inserts a single row using ONLY columns that actually exist in Postgres.
     """
-    existing = _table_columns(engine, table, schema=schema)
-    filtered = {k: v for k, v in payload.items() if k in existing}
+    existing_cols = _get_table_columns(engine, table, schema)
+    filtered = {k: v for k, v in payload.items() if k in existing_cols}
 
     if not filtered:
-        # Nothing to insert based on actual schema
         return False
 
-    cols = list(filtered.keys())
-    params = {k: filtered[k] for k in cols}
+    columns_sql = ", ".join(filtered.keys())
+    values_sql = ", ".join(f":{k}" for k in filtered.keys())
 
-    col_sql = ", ".join(cols)
-    val_sql = ", ".join([f":{c}" for c in cols])
-
+    conflict_sql = ""
     if conflict_cols:
         conflict_sql = f" ON CONFLICT ({', '.join(conflict_cols)}) DO NOTHING"
-    else:
-        conflict_sql = ""
 
-    sql = text(f"INSERT INTO {schema}.{table} ({col_sql}) VALUES ({val_sql}){conflict_sql};")
+    sql = text(
+        f"""
+        INSERT INTO {schema}.{table} ({columns_sql})
+        VALUES ({values_sql})
+        {conflict_sql};
+        """
+    )
 
     with engine.begin() as conn:
-        conn.execute(sql, params)
+        conn.execute(sql, filtered)
+
     return True
 
 
@@ -78,33 +82,40 @@ def _safe_insert_many(
     schema: str = "public",
 ) -> int:
     """
-    Bulk insert using only existing columns.
-    Uses executemany with SQLAlchemy text.
+    Bulk insert DataFrame using only existing columns.
     """
     if df.empty:
         return 0
 
-    existing = _table_columns(engine, table, schema=schema)
-    use_cols = [c for c in df.columns if c in existing]
-    if not use_cols:
+    existing_cols = _get_table_columns(engine, table, schema)
+    usable_cols = [c for c in df.columns if c in existing_cols]
+
+    if not usable_cols:
         return 0
 
-    df2 = df[use_cols].copy()
+    df2 = df[usable_cols].copy()
 
-    col_sql = ", ".join(use_cols)
-    val_sql = ", ".join([f":{c}" for c in use_cols])
+    columns_sql = ", ".join(usable_cols)
+    values_sql = ", ".join(f":{c}" for c in usable_cols)
 
-    sql = text(f"INSERT INTO {schema}.{table} ({col_sql}) VALUES ({val_sql});")
+    sql = text(
+        f"""
+        INSERT INTO {schema}.{table} ({columns_sql})
+        VALUES ({values_sql});
+        """
+    )
 
     records = df2.to_dict(orient="records")
+
     with engine.begin() as conn:
         conn.execute(sql, records)
+
     return len(records)
 
 
-# -----------------------------
-# Core ETL
-# -----------------------------
+# =========================================================
+# Main ETL — FINAL, CONTRACT-ALIGNED
+# =========================================================
 
 def run_etl(
     xlsx_path: str | Path,
@@ -114,13 +125,16 @@ def run_etl(
     engine: Optional[Engine] = None,
 ) -> ETLResult:
     """
-    End-to-end:
-      1) Create import_id (UUID)
-      2) Insert into stg_mls_raw (schema-safe)
-      3) Classify XLSX into DataFrame
-      4) Add import_id to classified df
-      5) Insert into stg_mls_classified (schema-safe)
+    End-to-end MLS ETL
+
+    Steps:
+    1) Generate import_id (UUID)
+    2) Insert into stg_mls_raw (REQUIRED: source_file)
+    3) Classify XLSX via contract
+    4) Attach import_id
+    5) Insert into stg_mls_classified
     """
+
     try:
         engine = engine or get_engine()
         snapshot_date = snapshot_date or date.today()
@@ -128,29 +142,55 @@ def run_etl(
         xlsx_path = Path(xlsx_path)
         contract_path = Path(contract_path)
 
+        if not xlsx_path.exists():
+            raise FileNotFoundError(f"XLSX file not found: {xlsx_path}")
+
+        if not contract_path.exists():
+            raise FileNotFoundError(f"Contract not found: {contract_path}")
+
+        # -------------------------------------------------
+        # 1) Generate import_id
+        # -------------------------------------------------
         import_id = str(uuid.uuid4())
 
-        # 1) Insert raw record (ONLY what exists in DB)
+        # -------------------------------------------------
+        # 2) Insert RAW import (REAL DB CONTRACT)
+        # REQUIRED by DB:
+        #   - import_id
+        #   - source_file (NOT NULL)
+        # -------------------------------------------------
         inserted_raw = _safe_insert_one(
             engine,
-            "stg_mls_raw",
+            table="stg_mls_raw",
             payload={
                 "import_id": import_id,
-                "filename": xlsx_path.name,
-                "snapshot_date": snapshot_date,
-                "imported_at": snapshot_date,  # if column exists & is date; otherwise ignored
+                "source_file": xlsx_path.name,  # 🔴 REQUIRED
             },
             conflict_cols=("import_id",),
         )
 
-        # 2) Classify file
-        df = classify_xlsx(xlsx_path=xlsx_path, contract_path=contract_path, snapshot_date=snapshot_date)
+        # -------------------------------------------------
+        # 3) Classify XLSX
+        # -------------------------------------------------
+        df = classify_xlsx(
+            xlsx_path=xlsx_path,
+            contract_path=contract_path,
+            snapshot_date=snapshot_date,
+        )
 
-        # 3) Attach FK
+        # -------------------------------------------------
+        # 4) Attach FK
+        # -------------------------------------------------
         df["import_id"] = import_id
 
-        # 4) Insert classified rows
-        inserted_rows = _safe_insert_many(engine, "stg_mls_classified", df)
+        # -------------------------------------------------
+        # 5) Insert classified rows
+        # -------------------------------------------------
+        inserted_rows = _safe_insert_many(
+            engine,
+            table="stg_mls_classified",
+            df=df,
+        )
 
         return ETLResult(
             ok=True,
