@@ -83,7 +83,7 @@ def _safe_json(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # =========================================================
-# RAW INSERT (CORRIGIDO COM row_hash)
+# RAW INSERT (CORRIGIDO: Alterado 'src' para 'row_json')
 # =========================================================
 
 def _insert_stg_mls_raw(
@@ -99,11 +99,14 @@ def _insert_stg_mls_raw(
 
     cols = _table_columns(engine, "stg_mls_raw", schema)
 
+    # Verificação básica de colunas obrigatórias
     required = {"import_id", "row_number", "row_hash"}
     missing = required - cols
     if missing:
         raise RuntimeError(f"stg_mls_raw missing required columns: {missing}")
 
+    # Definimos quais colunas vamos tentar inserir. 
+    # IMPORTANTE: Mudamos 'src' para 'row_json' para bater com o Banco de Dados.
     insert_cols = [
         c for c in [
             "import_id",
@@ -111,7 +114,7 @@ def _insert_stg_mls_raw(
             "source_tag",
             "row_number",
             "row_hash",
-            "src",
+            "row_json",  
         ]
         if c in cols
     ]
@@ -119,27 +122,38 @@ def _insert_stg_mls_raw(
     rows: List[Dict[str, Any]] = []
 
     for i, (_, r) in enumerate(df_raw.iterrows(), start=1):
-        src = _safe_json(r.to_dict())
-        rh = _row_hash(src)
+        # Transforma a linha do Excel em um dicionário limpo
+        clean_row_dict = _safe_json(r.to_dict())
+        
+        # Gera o hash único da linha para evitar duplicatas
+        rh = _row_hash(clean_row_dict)
 
-        row = {
+        # Prepara o dicionário de dados para o INSERT
+        row_data = {
             "import_id": import_id,
             "row_number": i,
             "row_hash": rh,
         }
 
         if "source_file" in cols:
-            row["source_file"] = source_file
+            row_data["source_file"] = source_file
         if "source_tag" in cols:
-            row["source_tag"] = source_tag
-        if "src" in cols:
-            row["src"] = src
+            row_data["source_tag"] = source_tag
+        
+        # Aqui é onde o erro acontecia. Agora populamos 'row_json' corretamente.
+        if "row_json" in cols:
+            row_data["row_json"] = json.dumps(clean_row_dict)
 
-        rows.append({k: row[k] for k in insert_cols})
+        # Adiciona apenas as colunas que existem de fato na tabela
+        rows.append({k: row_data[k] for k in insert_cols})
+
+    if not rows:
+        return 0
 
     col_list = ", ".join(insert_cols)
     val_list = ", ".join([f":{c}" for c in insert_cols])
 
+    # SQL dinâmico baseado nas colunas detectadas
     sql = text(f"""
         INSERT INTO {schema}.stg_mls_raw ({col_list})
         VALUES ({val_list})
@@ -204,14 +218,17 @@ def run_etl(
     try:
         engine = get_engine()
 
+        # Cria arquivo temporário para leitura do Excel
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
             tmp.write(xlsx_file.getbuffer())
             xlsx_path = Path(tmp.name)
 
         import_id = str(uuid.uuid4())
 
+        # Lê o arquivo Excel
         df_raw = pd.read_excel(xlsx_path, engine="openpyxl")
 
+        # 1. Insere os dados brutos (Onde corrigimos o erro)
         raw_count = _insert_stg_mls_raw(
             engine=engine,
             import_id=import_id,
@@ -222,18 +239,24 @@ def run_etl(
             schema=schema,
         )
 
+        # 2. Classifica os dados usando a IA/Contrato
         df_classified = classify_xlsx(
             xlsx_path=xlsx_path,
             contract_path=Path(contract_path),
             snapshot_date=snapshot_date,
         )
 
+        # 3. Insere os dados classificados para análise da Webtool
         classified_count = _insert_stg_mls_classified(
             engine=engine,
             import_id=import_id,
             df=df_classified,
             schema=schema,
         )
+
+        # Remove o arquivo temporário após o sucesso
+        if xlsx_path.exists():
+            os.remove(xlsx_path)
 
         return ETLResult(
             ok=True,
