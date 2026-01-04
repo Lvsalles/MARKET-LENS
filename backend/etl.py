@@ -1,6 +1,7 @@
 from datetime import date
 from pathlib import Path
 from typing import List, Optional
+from uuid import uuid4
 
 import pandas as pd
 
@@ -18,12 +19,15 @@ def run_etl(
 ) -> pd.DataFrame:
     """
     Executa o ETL completo:
-    - classifica arquivos XLSX
+    - gera import_id único por carga
+    - classifica XLSX
     - concatena resultados
     - grava no banco
     """
 
     snapshot_date = snapshot_date or date.today()
+    import_id = uuid4()  # 🔑 UM ID POR CARGA
+
     dfs = []
 
     for file_path in xlsx_files:
@@ -32,12 +36,20 @@ def run_etl(
             contract_path=CONTRACT_PATH,
             snapshot_date=snapshot_date,
         )
+
+        # 🔗 associa todas as linhas ao mesmo import_id
+        df["import_id"] = import_id
+
         dfs.append(df)
 
     if not dfs:
         raise ValueError("Nenhum arquivo XLSX processado.")
 
     final_df = pd.concat(dfs, ignore_index=True)
+
+    # 🔒 validação mínima
+    if final_df["import_id"].isna().any():
+        raise RuntimeError("import_id não foi corretamente atribuído.")
 
     if persist:
         engine = get_engine()
