@@ -11,7 +11,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from backend.db import get_engine
-from backend.contracts.mls_classify import classify_xlsx
+from backend.core.mls_classify import classify_xlsx
 
 
 @dataclass
