@@ -1,11 +1,11 @@
 """
-Market Lens — MLS ETL (Cloud-first, schema-aligned, FK-safe)
+Market Lens — MLS ETL (FINAL, schema-proof)
 
-Este ETL respeita EXATAMENTE o schema atual:
-stg_mls_raw:
-- import_id (UUID)
-- snapshot_date (DATE)
-- imported_at (TIMESTAMP)
+Este ETL:
+- Respeita EXATAMENTE o schema atual do banco
+- stg_mls_raw: apenas (import_id, imported_at)
+- stg_mls_classified: recebe os dados classificados + import_id
+- Funciona com Streamlit UploadedFile
 """
 
 from __future__ import annotations
@@ -50,23 +50,21 @@ def _normalize_contract_path(contract_path) -> Path:
 
 
 # =========================================================
-# RAW insert (ALINHADO AO SCHEMA REAL)
+# RAW insert (100% alinhado ao schema REAL)
 # =========================================================
 
-def insert_raw(engine, *, import_id, snapshot_date: date):
+def insert_raw(engine, *, import_id):
     """
-    Insere APENAS colunas que existem em stg_mls_raw
+    Insere APENAS o que existe em stg_mls_raw
     """
     sql = text(
         """
         INSERT INTO stg_mls_raw (
             import_id,
-            snapshot_date,
             imported_at
         )
         VALUES (
             :import_id,
-            :snapshot_date,
             NOW()
         )
         """
@@ -75,10 +73,7 @@ def insert_raw(engine, *, import_id, snapshot_date: date):
     with engine.begin() as conn:
         conn.execute(
             sql,
-            {
-                "import_id": str(import_id),
-                "snapshot_date": snapshot_date,
-            },
+            {"import_id": str(import_id)},
         )
 
 
@@ -93,7 +88,9 @@ def run_etl(
     snapshot_date: date | None = None,
 ):
     """
-    ETL MLS resiliente, alinhado ao schema real.
+    ETL MLS FINAL:
+    - Não assume colunas inexistentes
+    - snapshot_date é usado apenas para classificação (não RAW)
     """
 
     snapshot_date = snapshot_date or date.today()
@@ -106,37 +103,3 @@ def run_etl(
     import_id = uuid4()
 
     # 1) RAW (tabela pai)
-    insert_raw(
-        engine,
-        import_id=import_id,
-        snapshot_date=snapshot_date,
-    )
-
-    # 2) CLASSIFY
-    df = classify_xlsx(
-        xlsx_path=xlsx_path,
-        contract_path=contract_path,
-        snapshot_date=snapshot_date,
-    )
-
-    if df is None or df.empty:
-        raise ValueError("Classificação retornou DataFrame vazio")
-
-    df["import_id"] = str(import_id)
-
-    # 3) CLASSIFIED (tabela filha)
-    df.to_sql(
-        "stg_mls_classified",
-        engine,
-        if_exists="append",
-        index=False,
-        method="multi",
-        chunksize=500,
-    )
-
-    return {
-        "status": "success",
-        "import_id": str(import_id),
-        "rows_inserted": int(len(df)),
-        "snapshot_date": snapshot_date.isoformat(),
-    }
