@@ -1,13 +1,44 @@
-try:
-    result = run_etl(
-        xlsx_path=uploaded,
-        contract_path=str(CONTRACT_PATH),
-        snapshot_date=snapshot,
-    )
+import streamlit as st
+from datetime import date
+from pathlib import Path
 
-    st.success("ETL finished successfully!")
-    st.json(result)   # result é dict → OK
+from backend.etl import run_etl
 
-except Exception as e:
-    st.error("Erro ao executar ETL")
-    st.exception(e)   # NÃO use st.json aqui
+# =========================================================
+# UI
+# =========================================================
+
+st.set_page_config(page_title="Market Lens — MLS ETL", layout="centered")
+st.title("Market Lens — MLS Import")
+
+uploaded = st.file_uploader("Upload MLS XLSX", type=["xlsx"])
+snapshot = st.date_input("Snapshot date", value=date.today())
+
+# ajuste se o caminho do contrato for diferente
+CONTRACT_PATH = Path("backend/contracts/mls_contract.yaml")
+
+run_btn = st.button("Run ETL")
+
+# =========================================================
+# ACTION
+# =========================================================
+
+if run_btn:
+    if not uploaded:
+        st.error("Please upload an XLSX file.")
+        st.stop()
+
+    try:
+        result = run_etl(
+            xlsx_path=uploaded,
+            contract_path=str(CONTRACT_PATH),
+            snapshot_date=snapshot,
+        )
+
+        st.success("ETL finished successfully!")
+        st.json(result)
+
+    except Exception as e:
+        st.error("Erro ao executar ETL")
+        st.exception(e)
+
