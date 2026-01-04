@@ -1,16 +1,11 @@
 """
-Normalization helpers — Market Lens
+Normalization helpers — Market Lens (Cloud-first)
 
-⚠️ REGRAS IMPORTANTES:
-- NÃO contém lógica de negócio
-- NÃO classifica tipo de ativo
-- NÃO interpreta status
-- NÃO conhece MLS
-
-Este módulo serve apenas para:
-- limpar strings
-- converter números
-- converter datas
+Este módulo NÃO contém regras de negócio.
+Serve apenas para conversões técnicas:
+- strings
+- números
+- datas
 """
 
 from datetime import date, datetime
