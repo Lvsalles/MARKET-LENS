@@ -1,0 +1,443 @@
+version: 1.0.0
+generated_at_utc: '2026-01-04T13:36:51Z'
+sources:
+  rental:
+    file: RENTAL - NORTH PORT - 2025.xlsx
+    columns:
+    - '#'
+    - ML Number
+    - Status
+    - County
+    - Current Price
+    - Address
+    - City
+    - Zip
+    - Beds
+    - Full Baths
+    - Half Baths
+    - Legal Subdivision Name
+    - Subdivision/Condo Name
+    - Heated Area
+    - Year Built
+    - Pool
+    - Property Style
+    - Date Available
+    - Pets Allowed
+    - Lease Amount Frequency
+    - List Office ID
+    - List Agent
+    - List Agent ID
+    - Selling Office ID
+    - Close Date
+  land:
+    file: VACANT LAND - NORTH PORT - 2025.xlsx
+    columns:
+    - '#'
+    - ML Number
+    - Status
+    - County
+    - Current Price
+    - Address
+    - City
+    - Lot Dimensions
+    - Lot Size Square Footage
+    - Total Acreage
+    - Zoning
+    - Ownership
+    - Tax
+    - Legal Subdivision Name
+    - Subdivision/Condo Name
+    - List Office ID
+    - List Agent
+    - List Agent ID
+    - Selling Office ID
+    - Close Date
+  residential_sale:
+    file: PROPERTIES - NORTH PORT - 2025.xlsx
+    columns:
+    - '#'
+    - ML Number
+    - Status
+    - Current Price
+    - Address
+    - City
+    - Zip
+    - Beds
+    - Full Baths
+    - Half Baths
+    - Legal Subdivision Name
+    - Subdivision/Condo Name
+    - Heated Area
+    - Year Built
+    - Pool
+    - Property Style
+    - Ownership
+    - Tax
+    - CDOM
+    - ADOM
+    - Days to Contract
+    - Sold Terms
+    - Close Date
+    - LP / SqFt
+    - SP/SqFt
+    - SP / LP
+    - List Office
+    - List Agent
+    - List Agent ID
+    - Selling Office ID
+    - LSC List Side
+    - List Office Primary Board ID
+common_columns:
+  all_three:
+  - '#'
+  - Address
+  - City
+  - Close Date
+  - Current Price
+  - Legal Subdivision Name
+  - List Agent ID
+  - ML Number
+  - Selling Office ID
+  - Status
+  - Subdivision/Condo Name
+  rental_and_sale:
+  - Beds
+  - Full Baths
+  - Half Baths
+  - Heated Area
+  - List Agent
+  - Pool
+  - Property Style
+  - Year Built
+  - Zip
+  land_and_sale:
+  - County
+  - Ownership
+  - Tax
+  rental_and_land:
+  - County
+  - List Agent
+  - List Office ID
+signatures:
+  rental_if_has_any:
+  - Pets Allowed
+  - Lease Amount Frequency
+  - Date Available
+  land_if_has_any:
+  - Lot Dimensions
+  - Lot Size Square Footage
+  - Total Acreage
+  - Zoning
+  sale_if_has_any:
+  - LP / SqFt
+  - SP/SqFt
+  - SP / LP
+  - ADOM
+  - CDOM
+status_rules:
+  rental:
+    ACT: listing
+    PND: pending
+    LSE: closed:leased
+  land:
+    ACT: listing
+    PND: pending
+    SLD: closed:sold
+  residential_sale:
+    ACT: listing
+    PND: pending
+    SLD: closed:sold
+price_normalization:
+  raw_field: Current Price
+  rules:
+  - when: asset_class in (land,residential_sale) and status_raw in (ACT,PND)
+    set: list_price = current_price
+  - when: asset_class in (land,residential_sale) and status_raw = SLD
+    set: close_price = current_price
+  - when: asset_class = rental and status_raw in (ACT,PND)
+    set: list_price = current_price
+  - when: asset_class = rental and status_raw = LSE
+    set: close_price = current_price
+column_catalog:
+- raw: '#'
+  canonical: row_index
+  applies_to:
+  - rental
+  - land
+  - residential_sale
+  layer: staging_only
+  notes: ''
+- raw: ADOM
+  canonical: adom
+  applies_to:
+  - residential_sale
+  layer: fact_sale_metrics
+  notes: ''
+- raw: Address
+  canonical: address
+  applies_to:
+  - rental
+  - land
+  - residential_sale
+  layer: dim_property
+  notes: ''
+- raw: Beds
+  canonical: beds
+  applies_to:
+  - rental
+  - residential_sale
+  layer: dim_property
+  notes: ''
+- raw: CDOM
+  canonical: cdom
+  applies_to:
+  - residential_sale
+  layer: fact_sale_metrics
+  notes: ''
+- raw: City
+  canonical: city
+  applies_to:
+  - rental
+  - land
+  - residential_sale
+  layer: dim_property
+  notes: ''
+- raw: Close Date
+  canonical: close_date
+  applies_to:
+  - rental
+  - land
+  - residential_sale
+  layer: fact_market_event_core
+  notes: ''
+- raw: County
+  canonical: county
+  applies_to:
+  - rental
+  - land
+  layer: dim_property
+  notes: ''
+- raw: Current Price
+  canonical: current_price
+  applies_to:
+  - rental
+  - land
+  - residential_sale
+  layer: fact_market_event_core
+  notes: ''
+- raw: Date Available
+  canonical: date_available
+  applies_to:
+  - rental
+  layer: dim_rental_attributes
+  notes: ''
+- raw: Days to Contract
+  canonical: days_to_contract
+  applies_to:
+  - residential_sale
+  layer: fact_sale_metrics
+  notes: ''
+- raw: Full Baths
+  canonical: full_baths
+  applies_to:
+  - rental
+  - residential_sale
+  layer: dim_property
+  notes: ''
+- raw: Half Baths
+  canonical: half_baths
+  applies_to:
+  - rental
+  - residential_sale
+  layer: dim_property
+  notes: ''
+- raw: Heated Area
+  canonical: heated_area
+  applies_to:
+  - rental
+  - residential_sale
+  layer: dim_property
+  notes: ''
+- raw: LP / SqFt
+  canonical: lp_sqft
+  applies_to:
+  - residential_sale
+  layer: fact_sale_metrics
+  notes: ''
+- raw: LSC List Side
+  canonical: lsc_list_side
+  applies_to:
+  - residential_sale
+  layer: fact_sale_metrics
+  notes: ''
+- raw: Lease Amount Frequency
+  canonical: lease_amount_frequency
+  applies_to:
+  - rental
+  layer: dim_rental_attributes
+  notes: ''
+- raw: Legal Subdivision Name
+  canonical: legal_subdivision_name
+  applies_to:
+  - rental
+  - land
+  - residential_sale
+  layer: dim_property
+  notes: ''
+- raw: List Agent
+  canonical: list_agent
+  applies_to:
+  - rental
+  - land
+  - residential_sale
+  layer: dim_participants
+  notes: ''
+- raw: List Agent ID
+  canonical: list_agent_id
+  applies_to:
+  - rental
+  - land
+  - residential_sale
+  layer: dim_participants
+  notes: ''
+- raw: List Office
+  canonical: list_office
+  applies_to:
+  - residential_sale
+  layer: dim_participants
+  notes: ''
+- raw: List Office ID
+  canonical: list_office_id
+  applies_to:
+  - rental
+  - land
+  layer: dim_participants
+  notes: ''
+- raw: List Office Primary Board ID
+  canonical: list_office_primary_board_id
+  applies_to:
+  - residential_sale
+  layer: dim_participants
+  notes: ''
+- raw: Lot Dimensions
+  canonical: lot_dimensions
+  applies_to:
+  - land
+  layer: dim_land_attributes
+  notes: ''
+- raw: Lot Size Square Footage
+  canonical: lot_size_square_footage
+  applies_to:
+  - land
+  layer: dim_land_attributes
+  notes: ''
+- raw: ML Number
+  canonical: ml_number
+  applies_to:
+  - rental
+  - land
+  - residential_sale
+  layer: dim_property
+  notes: ''
+- raw: Ownership
+  canonical: ownership
+  applies_to:
+  - land
+  - residential_sale
+  layer: dim_land_attributes
+  notes: ''
+- raw: Pets Allowed
+  canonical: pets_allowed
+  applies_to:
+  - rental
+  layer: dim_rental_attributes
+  notes: ''
+- raw: Pool
+  canonical: pool
+  applies_to:
+  - rental
+  - residential_sale
+  layer: dim_property
+  notes: ''
+- raw: Property Style
+  canonical: property_style
+  applies_to:
+  - rental
+  - residential_sale
+  layer: dim_property
+  notes: ''
+- raw: SP / LP
+  canonical: sp_lp
+  applies_to:
+  - residential_sale
+  layer: fact_sale_metrics
+  notes: ''
+- raw: SP/SqFt
+  canonical: sp_sqft
+  applies_to:
+  - residential_sale
+  layer: fact_sale_metrics
+  notes: ''
+- raw: Selling Office ID
+  canonical: selling_office_id
+  applies_to:
+  - rental
+  - land
+  - residential_sale
+  layer: dim_participants
+  notes: ''
+- raw: Sold Terms
+  canonical: sold_terms
+  applies_to:
+  - residential_sale
+  layer: fact_sale_metrics
+  notes: ''
+- raw: Status
+  canonical: status
+  applies_to:
+  - rental
+  - land
+  - residential_sale
+  layer: fact_market_event_core
+  notes: ''
+- raw: Subdivision/Condo Name
+  canonical: subdivision_condo_name
+  applies_to:
+  - rental
+  - land
+  - residential_sale
+  layer: dim_property
+  notes: ''
+- raw: Tax
+  canonical: tax
+  applies_to:
+  - land
+  - residential_sale
+  layer: dim_land_attributes
+  notes: ''
+- raw: Total Acreage
+  canonical: total_acreage
+  applies_to:
+  - land
+  layer: dim_land_attributes
+  notes: ''
+- raw: Year Built
+  canonical: year_built
+  applies_to:
+  - rental
+  - residential_sale
+  layer: dim_property
+  notes: ''
+- raw: Zip
+  canonical: zip
+  applies_to:
+  - rental
+  - residential_sale
+  layer: dim_property
+  notes: ''
+- raw: Zoning
+  canonical: zoning
+  applies_to:
+  - land
+  layer: dim_land_attributes
+  notes: ''
