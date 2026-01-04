@@ -1,85 +1,109 @@
-# backend/etl.py
+"""
+Market Lens — MLS ETL (Cloud-first)
+
+Responsabilidade deste módulo:
+- Orquestrar o ETL
+- Gerar import_id
+- Chamar o classificador determinístico
+- Inserir dados no banco
+
+NÃO contém:
+- Lógica de classificação
+- Regras de negócio MLS
+"""
+
+from __future__ import annotations
+
+from datetime import date, datetime
+from pathlib import Path
+from typing import Optional
+import uuid
+
 import pandas as pd
 from sqlalchemy import text
+from sqlalchemy.engine import Engine
+
 from backend.db import get_engine
-from backend.core.mls_classifier import classify_dataframe
-import yaml
+from backend.contracts.mls_classify import classify_xlsx
 
 
+# =========================================================
+# Helpers
+# =========================================================
 
-def run_etl(xlsx_file, snapshot_date):
+def _ensure_path(path: str | Path) -> Path:
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"File not found: {p}")
+    return p
+
+
+# =========================================================
+# Main ETL entrypoint
+# =========================================================
+
+def run_etl(
+    xlsx_path: str | Path,
+    contract_path: str | Path,
+    snapshot_date: Optional[date] = None,
+) -> dict:
     """
-    Pipeline ETL MLS:
-    1) Lê XLSX
-    2) Insere RAW (gera import_id UUID no banco)
-    3) Reutiliza o MESMO import_id no CLASSIFIED
+    Executa o ETL completo para um arquivo MLS XLSX.
+
+    Retorna um resumo com:
+    - import_id
+    - rows_inserted
     """
 
-    engine = get_engine()
+    snapshot_date = snapshot_date or date.today()
 
-    # --- 1. Ler arquivo ---
-    raw_df = pd.read_excel(xlsx_file)
+    xlsx_path = _ensure_path(xlsx_path)
+    contract_path = _ensure_path(contract_path)
 
-    if raw_df.empty:
-        raise ValueError("Arquivo XLSX está vazio")
+    engine: Engine = get_engine()
 
+    # -----------------------------------------------------
+    # 1. Gerar import_id (UUID — FONTE DA VERDADE)
+    # -----------------------------------------------------
+    import_id = uuid.uuid4()
+
+    # -----------------------------------------------------
+    # 2. Classificar XLSX (determinístico)
+    # -----------------------------------------------------
+    df: pd.DataFrame = classify_xlsx(
+        xlsx_path=xlsx_path,
+        contract_path=contract_path,
+        snapshot_date=snapshot_date,
+    )
+
+    if df.empty:
+        raise ValueError("Classifier returned empty DataFrame")
+
+    # -----------------------------------------------------
+    # 3. Anexar import_id
+    # -----------------------------------------------------
+    df["import_id"] = import_id
+
+    # -----------------------------------------------------
+    # 4. Inserir em stg_mls_classified
+    # -----------------------------------------------------
     with engine.begin() as conn:
-        # --- 2. Inserir RAW ---
-        raw_df["snapshot_date"] = snapshot_date
-
-        raw_df.to_sql(
-            "stg_mls_raw",
-            conn,
+        df.to_sql(
+            name="stg_mls_classified",
+            con=conn,
             if_exists="append",
             index=False,
             method="multi",
+            chunksize=500,
         )
 
-        # --- 3. Capturar import_id recém-criado ---
-        result = conn.execute(
-            text(
-                """
-                SELECT import_id
-                FROM stg_mls_raw
-                ORDER BY created_at DESC
-                LIMIT 1
-                """
-            )
-        ).fetchone()
-
-        if not result:
-            raise RuntimeError("Falha ao capturar import_id do RAW")
-
-        import_id = result[0]
-
-        # --- 4. Classificar / normalizar ---
-        with open("backend/contracts/mls_column_contract.yaml", "r") as f:
-    contract = yaml.safe_load(f)
-
-classified_df = classify_dataframe(
-    raw_df,
-    contract=contract,
-    snapshot_date=snapshot_date,
-)
-
-        if classified_df.empty:
-            raise ValueError("Classificação retornou DataFrame vazio")
-
-        classified_df["snapshot_date"] = snapshot_date
-        classified_df["import_id"] = import_id
-
-        # --- 5. Inserir CLASSIFIED ---
-        classified_df.to_sql(
-            "stg_mls_classified",
-            conn,
-            if_exists="append",
-            index=False,
-            method="multi",
-        )
-
+    # -----------------------------------------------------
+    # 5. Retorno controlado
+    # -----------------------------------------------------
     return {
-        "status": "success",
-        "rows_raw": len(raw_df),
-        "rows_classified": len(classified_df),
         "import_id": str(import_id),
+        "rows_inserted": int(len(df)),
+        "snapshot_date": snapshot_date.isoformat(),
+        "asset_class": df["asset_class"].iloc[0],
+        "executed_at": datetime.utcnow().isoformat(),
     }
