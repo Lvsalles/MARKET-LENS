@@ -1,64 +1,75 @@
-from datetime import date
-from pathlib import Path
-from typing import List, Optional
-from uuid import uuid4
-
+# backend/etl.py
 import pandas as pd
+from sqlalchemy import text
+from backend.db import get_engine
+from backend.contracts.mls_classify import classify_xlsx
 
-from backend.core.mls_classify import classify_xlsx
-from backend.db.db import get_engine
-
-CONTRACT_PATH = Path("backend/contracts/mls_column_contract.yaml")
-TARGET_TABLE = "stg_mls_classified"
-
-
-def run_etl(
-    xlsx_files: List[str],
-    snapshot_date: Optional[date] = None,
-    persist: bool = True,
-) -> pd.DataFrame:
+def run_etl(xlsx_file, snapshot_date):
     """
-    Executa o ETL completo:
-    - gera import_id único por carga
-    - classifica XLSX
-    - concatena resultados
-    - grava no banco
+    Pipeline ETL MLS:
+    1) Lê XLSX
+    2) Insere RAW (gera import_id UUID no banco)
+    3) Reutiliza o MESMO import_id no CLASSIFIED
     """
 
-    snapshot_date = snapshot_date or date.today()
-    import_id = uuid4()  # 🔑 UM ID POR CARGA
+    engine = get_engine()
 
-    dfs = []
+    # --- 1. Ler arquivo ---
+    raw_df = pd.read_excel(xlsx_file)
 
-    for file_path in xlsx_files:
-        df = classify_xlsx(
-            xlsx_path=file_path,
-            contract_path=CONTRACT_PATH,
-            snapshot_date=snapshot_date,
-        )
+    if raw_df.empty:
+        raise ValueError("Arquivo XLSX está vazio")
 
-        # 🔗 associa todas as linhas ao mesmo import_id
-        df["import_id"] = import_id
+    with engine.begin() as conn:
+        # --- 2. Inserir RAW ---
+        raw_df["snapshot_date"] = snapshot_date
 
-        dfs.append(df)
-
-    if not dfs:
-        raise ValueError("Nenhum arquivo XLSX processado.")
-
-    final_df = pd.concat(dfs, ignore_index=True)
-
-    # 🔒 validação mínima
-    if final_df["import_id"].isna().any():
-        raise RuntimeError("import_id não foi corretamente atribuído.")
-
-    if persist:
-        engine = get_engine()
-        final_df.to_sql(
-            TARGET_TABLE,
-            engine,
+        raw_df.to_sql(
+            "stg_mls_raw",
+            conn,
             if_exists="append",
             index=False,
             method="multi",
         )
 
-    return final_df
+        # --- 3. Capturar import_id recém-criado ---
+        result = conn.execute(
+            text(
+                """
+                SELECT import_id
+                FROM stg_mls_raw
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            )
+        ).fetchone()
+
+        if not result:
+            raise RuntimeError("Falha ao capturar import_id do RAW")
+
+        import_id = result[0]
+
+        # --- 4. Classificar / normalizar ---
+        classified_df = classify_xlsx(raw_df)
+
+        if classified_df.empty:
+            raise ValueError("Classificação retornou DataFrame vazio")
+
+        classified_df["snapshot_date"] = snapshot_date
+        classified_df["import_id"] = import_id
+
+        # --- 5. Inserir CLASSIFIED ---
+        classified_df.to_sql(
+            "stg_mls_classified",
+            conn,
+            if_exists="append",
+            index=False,
+            method="multi",
+        )
+
+    return {
+        "status": "success",
+        "rows_raw": len(raw_df),
+        "rows_classified": len(classified_df),
+        "import_id": str(import_id),
+    }
