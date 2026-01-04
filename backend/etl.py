@@ -2,7 +2,9 @@
 import pandas as pd
 from sqlalchemy import text
 from backend.db import get_engine
-from backend.core.mls_classify import classify_xlsx
+from backend.core.mls_classifier import classify_dataframe
+import yaml
+
 
 
 def run_etl(xlsx_file, snapshot_date):
@@ -51,7 +53,14 @@ def run_etl(xlsx_file, snapshot_date):
         import_id = result[0]
 
         # --- 4. Classificar / normalizar ---
-        classified_df = classify_xlsx(raw_df)
+        with open("backend/contracts/mls_column_contract.yaml", "r") as f:
+    contract = yaml.safe_load(f)
+
+classified_df = classify_dataframe(
+    raw_df,
+    contract=contract,
+    snapshot_date=snapshot_date,
+)
 
         if classified_df.empty:
             raise ValueError("Classificação retornou DataFrame vazio")
