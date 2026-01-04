@@ -36,9 +36,8 @@ if run_btn:
         )
 
         st.success("ETL finished successfully!")
-        st.json(result)
+        st.write(result)   # 👈 NÃO st.json
 
     except Exception as e:
         st.error("Erro ao executar ETL")
         st.exception(e)
-
