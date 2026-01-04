@@ -1,50 +1,39 @@
-import sys
-from pathlib import Path
-import traceback
 import streamlit as st
+from datetime import date
 
-st.set_page_config(page_title="Market Lens")
+st.set_page_config(page_title="Market Lens — MLS ETL", layout="centered")
 
 st.title("Market Lens — MLS ETL")
+st.success("Backend carregado com sucesso")
 
-# --------------------
-# SAFE INIT
-# --------------------
-try:
-    ROOT_DIR = Path(__file__).resolve().parent
-    if str(ROOT_DIR) not in sys.path:
-        sys.path.insert(0, str(ROOT_DIR))
-
-    from backend.etl import run_etl
-    st.success("Backend carregado com sucesso")
-
-except Exception:
-    st.error("Erro ao inicializar o backend")
-    st.code(traceback.format_exc())
-    st.stop()
-
-# --------------------
-# UI
-# --------------------
-uploaded_files = st.file_uploader(
+# --- Upload ---
+uploaded_file = st.file_uploader(
     "Upload de arquivos MLS (.xlsx)",
-    type=["xlsx"],
-    accept_multiple_files=True
+    type=["xlsx"]
 )
 
-if st.button("▶ Executar ETL"):
-    if not uploaded_files:
-        st.warning("Nenhum arquivo selecionado")
-        st.stop()
+snapshot_date = st.date_input(
+    "Snapshot date",
+    value=date.today()
+)
 
-    st.info("Executando ETL...")
+# --- Botão ETL ---
+if st.button("Executar ETL"):
+    if uploaded_file is None:
+        st.error("Por favor, selecione um arquivo XLSX antes de executar o ETL.")
+    else:
+        st.info("Executando ETL...")
+        try:
+            from backend.etl import run_etl
 
-    try:
-        result = run_etl(uploaded_files)
+            result = run_etl(
+                uploaded_file,
+                snapshot_date
+            )
 
-        st.success("ETL executado com sucesso")
-        st.write(result)
+            st.success("ETL executado com sucesso!")
+            st.json(result)
 
-    except Exception:
-        st.error("❌ Erro ao executar ETL")
-        st.code(traceback.format_exc())
+        except Exception as e:
+            st.error("Erro ao executar ETL")
+            st.exception(e)
