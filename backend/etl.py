@@ -1,15 +1,14 @@
 """
 Market Lens — MLS ETL (Cloud-first)
 
-Responsabilidade deste módulo:
-- Orquestrar o ETL
-- Gerar import_id
-- Chamar o classificador determinístico
-- Inserir dados no banco
+Responsabilidade:
+- Gerar import_id (UUID)
+- Inserir o "pai" em stg_mls_imports
+- Classificar XLSX
+- Inserir em stg_mls_classified
 
 NÃO contém:
-- Lógica de classificação
-- Regras de negócio MLS
+- regras de classificação (isso fica no contract/classifier)
 """
 
 from __future__ import annotations
@@ -27,10 +26,6 @@ from backend.db import get_engine
 from backend.contracts.mls_classify import classify_xlsx
 
 
-# =========================================================
-# Helpers
-# =========================================================
-
 def _ensure_path(path: str | Path) -> Path:
     p = Path(path)
     if not p.exists():
@@ -38,23 +33,11 @@ def _ensure_path(path: str | Path) -> Path:
     return p
 
 
-# =========================================================
-# Main ETL entrypoint
-# =========================================================
-
 def run_etl(
     xlsx_path: str | Path,
     contract_path: str | Path,
     snapshot_date: Optional[date] = None,
 ) -> dict:
-    """
-    Executa o ETL completo para um arquivo MLS XLSX.
-
-    Retorna um resumo com:
-    - import_id
-    - rows_inserted
-    """
-
     snapshot_date = snapshot_date or date.today()
 
     xlsx_path = _ensure_path(xlsx_path)
@@ -62,14 +45,10 @@ def run_etl(
 
     engine: Engine = get_engine()
 
-    # -----------------------------------------------------
-    # 1. Gerar import_id (UUID — FONTE DA VERDADE)
-    # -----------------------------------------------------
     import_id = uuid.uuid4()
+    source_filename = xlsx_path.name
 
-    # -----------------------------------------------------
-    # 2. Classificar XLSX (determinístico)
-    # -----------------------------------------------------
+    # 1) Classificar XLSX
     df: pd.DataFrame = classify_xlsx(
         xlsx_path=xlsx_path,
         contract_path=contract_path,
@@ -79,15 +58,25 @@ def run_etl(
     if df.empty:
         raise ValueError("Classifier returned empty DataFrame")
 
-    # -----------------------------------------------------
-    # 3. Anexar import_id
-    # -----------------------------------------------------
+    # 2) Anexar import_id
     df["import_id"] = import_id
 
-    # -----------------------------------------------------
-    # 4. Inserir em stg_mls_classified
-    # -----------------------------------------------------
+    # 3) Transação: insere pai + insere dados
     with engine.begin() as conn:
+        # 3.1) Inserir pai na tabela de imports
+        conn.execute(
+            text("""
+                insert into stg_mls_imports (import_id, snapshot_date, source_filename)
+                values (:import_id, :snapshot_date, :source_filename)
+            """),
+            {
+                "import_id": str(import_id),
+                "snapshot_date": snapshot_date,
+                "source_filename": source_filename,
+            },
+        )
+
+        # 3.2) Inserir stg_mls_classified
         df.to_sql(
             name="stg_mls_classified",
             con=conn,
@@ -97,13 +86,11 @@ def run_etl(
             chunksize=500,
         )
 
-    # -----------------------------------------------------
-    # 5. Retorno controlado
-    # -----------------------------------------------------
     return {
         "import_id": str(import_id),
         "rows_inserted": int(len(df)),
         "snapshot_date": snapshot_date.isoformat(),
         "asset_class": df["asset_class"].iloc[0],
+        "source_filename": source_filename,
         "executed_at": datetime.utcnow().isoformat(),
     }
