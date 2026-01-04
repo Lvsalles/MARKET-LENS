@@ -35,17 +35,10 @@ def get_engine() -> Engine:
     return create_engine(_get_database_url(), pool_pre_ping=True)
 
 def _table_columns(engine: Engine, table: str, schema: str = "public") -> set[str]:
-    sql = text("""
-        SELECT column_name FROM information_schema.columns
-        WHERE table_schema = :schema AND table_name = :table
-    """)
+    sql = text("SELECT column_name FROM information_schema.columns WHERE table_schema = :s AND table_name = :t")
     with engine.connect() as conn:
-        rows = conn.execute(sql, {"schema": schema, "table": table}).fetchall()
+        rows = conn.execute(sql, {"s": schema, "t": table}).fetchall()
     return {r[0] for r in rows}
-
-def _row_hash(obj: Dict[str, Any]) -> str:
-    payload = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 def _safe_json(row: Dict[str, Any]) -> Dict[str, Any]:
     out = {}
@@ -55,54 +48,6 @@ def _safe_json(row: Dict[str, Any]) -> Dict[str, Any]:
         else: out[k] = v
     return out
 
-# 1. CRIA O REGISTRO MESTRE
-def _create_import_record(engine: Engine, import_id: str, source_file: str, source_tag: str, snapshot_date: date):
-    sql = text("""
-        INSERT INTO public.stg_mls_imports (import_id, source_file, source_tag, snapshot_date)
-        VALUES (:import_id, :source_file, :source_tag, :snapshot_date)
-    """)
-    with engine.begin() as conn:
-        conn.execute(sql, {"import_id": import_id, "source_file": source_file, "source_tag": source_tag, "snapshot_date": snapshot_date})
-
-# 2. INSERE DADOS BRUTOS
-def _insert_stg_mls_raw(engine: Engine, import_id: str, snapshot_date: date, df_raw: pd.DataFrame) -> int:
-    rows = []
-    for i, (_, r) in enumerate(df_raw.iterrows(), start=1):
-        clean_dict = _safe_json(r.to_dict())
-        rows.append({
-            "import_id": import_id,
-            "row_number": i,
-            "row_hash": _row_hash(clean_dict),
-            "row_json": json.dumps(clean_dict),
-            "snapshot_date": snapshot_date
-        })
-    
-    sql = text("""
-        INSERT INTO public.stg_mls_raw (import_id, row_number, row_hash, row_json, snapshot_date)
-        VALUES (:import_id, :row_number, :row_hash, :row_json, :snapshot_date)
-        ON CONFLICT (import_id, row_number) DO NOTHING
-    """)
-    with engine.begin() as conn:
-        conn.execute(sql, rows)
-    return len(rows)
-
-# 3. INSERE DADOS PROCESSADOS
-def _insert_stg_mls_classified(engine: Engine, import_id: str, df: pd.DataFrame) -> int:
-    cols = _table_columns(engine, "stg_mls_classified")
-    df = df.copy()
-    df["import_id"] = import_id
-    valid_cols = [c for c in df.columns if c in cols]
-    df = df[valid_cols].replace({np.nan: None})
-    
-    records = df.to_dict(orient="records")
-    if not records: return 0
-
-    sql = text(f"INSERT INTO public.stg_mls_classified ({', '.join(df.columns)}) VALUES ({', '.join(':'+c for c in df.columns)})")
-    with engine.begin() as conn:
-        conn.execute(sql, records)
-    return len(records)
-
-# FUNÇÃO PRINCIPAL
 def run_etl(*, xlsx_file: Any, snapshot_date: date, contract_path: Union[str, Path], source_tag: str = "MLS") -> ETLResult:
     try:
         engine = get_engine()
@@ -112,20 +57,50 @@ def run_etl(*, xlsx_file: Any, snapshot_date: date, contract_path: Union[str, Pa
             tmp.write(xlsx_file.getbuffer())
             xlsx_path = Path(tmp.name)
 
-        # Passo 1: Registro Mestre
-        _create_import_record(engine, import_id, xlsx_path.name, source_tag, snapshot_date)
-        
-        # Passo 2: Dados Brutos
+        # 1. Registro de Importação
+        with engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO public.stg_mls_imports (import_id, source_file, source_tag, snapshot_date)
+                VALUES (:id, :file, :tag, :dt)
+            """), {"id": import_id, "file": xlsx_path.name, "tag": source_tag, "dt": snapshot_date})
+
+        # 2. Leitura e Inserção Raw
         df_raw = pd.read_excel(xlsx_path, engine="openpyxl")
-        raw_count = _insert_stg_mls_raw(engine, import_id, snapshot_date, df_raw)
-
-        # Passo 3: Classificação via IA
-        df_classified = classify_xlsx(xlsx_path=xlsx_path, contract_path=Path(contract_path), snapshot_date=snapshot_date)
+        raw_rows = []
+        for i, (_, r) in enumerate(df_raw.iterrows(), start=1):
+            clean_dict = _safe_json(r.to_dict())
+            raw_rows.append({
+                "import_id": import_id,
+                "row_number": i,
+                "row_hash": hashlib.sha256(json.dumps(clean_dict, sort_keys=True).encode()).hexdigest(),
+                "row_json": json.dumps(clean_dict),
+                "snapshot_date": snapshot_date
+            })
         
-        # Passo 4: Dados Classificados
-        class_count = _insert_stg_mls_classified(engine, import_id, df_classified)
+        with engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO public.stg_mls_raw (import_id, row_number, row_hash, row_json, snapshot_date)
+                VALUES (:import_id, :row_number, :row_hash, :row_json, :snapshot_date)
+                ON CONFLICT (row_hash) DO NOTHING
+            """), raw_rows)
 
-        os.remove(xlsx_path)
-        return ETLResult(ok=True, import_id=import_id, rows_raw_inserted=raw_count, rows_classified_inserted=class_count)
+        # 3. Classificação e Inserção Classified
+        df_class = classify_xlsx(xlsx_path=xlsx_path, contract_path=Path(contract_path), snapshot_date=snapshot_date)
+        df_class["import_id"] = import_id
+        
+        # Garante que colunas do DF batam com o banco e trata NaNs
+        db_cols = _table_columns(engine, "stg_mls_classified")
+        df_class = df_class[[c for c in df_class.columns if c in db_cols]].replace({np.nan: None})
+        
+        records = df_class.to_dict(orient="records")
+        if records:
+            col_names = ", ".join(df_class.columns)
+            placeholders = ", ".join([f":{c}" for c in df_class.columns])
+            with engine.begin() as conn:
+                conn.execute(text(f"INSERT INTO public.stg_mls_classified ({col_names}) VALUES ({placeholders})"), records)
+
+        if xlsx_path.exists(): os.remove(xlsx_path)
+        return ETLResult(ok=True, import_id=import_id, rows_raw_inserted=len(raw_rows), rows_classified_inserted=len(records))
+
     except Exception as e:
         return ETLResult(ok=False, error=str(e))
