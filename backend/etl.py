@@ -69,11 +69,11 @@ def insert_raw(
 # =========================================================
 
 def run_etl(
-    *,
     xlsx_path: str | Path,
     contract_path: str | Path,
     snapshot_date: date,
 ):
+
     """
     Executa o ETL completo para um arquivo MLS
     """
