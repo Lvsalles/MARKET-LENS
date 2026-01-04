@@ -14,7 +14,8 @@ from datetime import date
 import tempfile
 
 # Agora o import funciona de forma confiável
-from backend.etl.__init__ import run_etl
+from backend.etl import run_etl
+
 
 
 # -------------------------------------------------
