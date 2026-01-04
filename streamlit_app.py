@@ -1,86 +1,92 @@
-# streamlit_app.py
-import os
+"""
+Market Lens — Streamlit ETL Runner (Cloud-first)
+
+Função:
+- Interface simples para rodar o ETL
+- Upload de arquivos MLS (.xlsx)
+- Visualizar resultado básico
+"""
+
 import streamlit as st
 import pandas as pd
-from sqlalchemy import create_engine, text
+from datetime import date
+from pathlib import Path
+import tempfile
 
-# --------------------------------------------------
-# PAGE CONFIG
-# --------------------------------------------------
+from backend.etl import run_etl
+
+
+# -------------------------------------------------
+# Page config
+# -------------------------------------------------
 st.set_page_config(
-    page_title="Market Lens — Data Explorer",
-    layout="wide"
+    page_title="Market Lens — ETL",
+    layout="wide",
 )
 
-st.title("📊 Market Lens — Data Explorer")
 
-# --------------------------------------------------
-# DATABASE URL
-# --------------------------------------------------
-DATABASE_URL = st.secrets.get("DATABASE_URL") or os.getenv("DATABASE_URL")
+# -------------------------------------------------
+# Header
+# -------------------------------------------------
+st.title("🏗️ Market Lens — MLS ETL")
+st.caption("Upload de arquivos MLS (.xlsx) e ingestão no banco")
 
-if not DATABASE_URL:
-    st.error("❌ DATABASE_URL não configurado.")
-    st.stop()
 
-# --------------------------------------------------
-# ENGINE
-# --------------------------------------------------
-@st.cache_resource
-def get_engine():
-    return create_engine(DATABASE_URL, pool_pre_ping=True)
-
-engine = get_engine()
-st.success("✅ Conectado ao banco com sucesso")
-
-# --------------------------------------------------
-# LOAD SCHEMAS
-# --------------------------------------------------
-@st.cache_data
-def load_schemas():
-    query = """
-        SELECT schema_name
-        FROM information_schema.schemata
-        ORDER BY schema_name;
-    """
-    with engine.connect() as conn:
-        return pd.read_sql(text(query), conn)
-
-schemas_df = load_schemas()
-
-st.subheader("Schemas disponíveis")
-st.dataframe(schemas_df, use_container_width=True)
-
-schema_list = schemas_df["schema_name"].tolist()
-
-default_schema_index = (
-    schema_list.index("public") if "public" in schema_list else 0
+# -------------------------------------------------
+# File upload
+# -------------------------------------------------
+uploaded_files = st.file_uploader(
+    "Selecione um ou mais arquivos XLSX",
+    type=["xlsx"],
+    accept_multiple_files=True,
 )
 
-schema = st.selectbox(
-    "Selecione o schema para explorar",
-    schema_list,
-    index=default_schema_index
-)
+run_button = st.button("▶️ Rodar ETL")
 
-# --------------------------------------------------
-# LOAD TABLES
-# --------------------------------------------------
-@st.cache_data
-def load_tables(schema_name):
-    query = """
-        SELECT table_name
-        FROM information_schema.tables
-        WHERE table_schema = :schema
-        ORDER BY table_name;
-    """
-    with engine.connect() as conn:
-        return pd.read_sql(
-            text(query),
-            conn,
-            params={"schema": schema_name}
-        )
 
-tables_df = load_tables(schema)
+# -------------------------------------------------
+# Run ETL
+# -------------------------------------------------
+if run_button and uploaded_files:
+    with st.spinner("Processando arquivos..."):
+        temp_paths = []
 
-st.subheader(f"Tabelas no schema `{schema}`")
+        try:
+            # salvar arquivos temporários (necessário no Streamlit)
+            for f in uploaded_files:
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+                tmp.write(f.read())
+                tmp.close()
+                temp_paths.append(tmp.name)
+
+            # executar ETL
+            df = run_etl(
+                xlsx_files=temp_paths,
+                snapshot_date=date.today(),
+                persist=True,
+            )
+
+            st.success("ETL executado com sucesso!")
+
+            # -------------------------------------------------
+            # Summary
+            # -------------------------------------------------
+            st.subheader("Resumo por Asset Class e Status")
+            summary = (
+                df.groupby(["asset_class", "status_group"])
+                .size()
+                .reset_index(name="total")
+            )
+            st.dataframe(summary, use_container_width=True)
+
+            # -------------------------------------------------
+            # Preview
+            # -------------------------------------------------
+            st.subheader("Preview dos dados ingeridos")
+            st.dataframe(df.head(50), use_container_width=True)
+
+        except Exception as e:
+            st.error(f"Erro ao executar ETL: {e}")
+
+else:
+    st.info("Faça upload de pelo menos um arquivo XLSX para iniciar.")
