@@ -1,11 +1,11 @@
 """
-Market Lens — MLS ETL (Cloud-first, FK-safe, resilient)
+Market Lens — MLS ETL (Cloud-first, UI-safe, FK-safe)
 
-Pipeline:
-1) Gera import_id (UUID)
-2) Insere RAW (stg_mls_raw)
-3) Classifica XLSX
-4) Insere CLASSIFIED (stg_mls_classified)
+Aceita:
+- path (str | Path)
+- UploadedFile (Streamlit)
+
+Normaliza tudo internamente.
 """
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 from uuid import uuid4
+import tempfile
+import os
 
 import pandas as pd
 from sqlalchemy import text
@@ -22,8 +24,37 @@ from backend.core.mls_classify import classify_xlsx
 
 
 # =========================================================
-# RAW insert (PAI)
+# Helpers
 # =========================================================
+
+def _normalize_xlsx_input(xlsx_input) -> Path:
+    """
+    Aceita Path | str | Streamlit UploadedFile
+    Retorna Path válido no filesystem
+    """
+
+    # Já é path
+    if isinstance(xlsx_input, (str, Path)):
+        return Path(xlsx_input)
+
+    # UploadedFile (Streamlit)
+    if hasattr(xlsx_input, "getbuffer") and hasattr(xlsx_input, "name"):
+        suffix = Path(xlsx_input.name).suffix or ".xlsx"
+
+        tmp = tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=suffix,
+        )
+
+        with tmp as f:
+            f.write(xlsx_input.getbuffer())
+
+        return Path(tmp.name)
+
+    raise TypeError(
+        f"Unsupported xlsx_input type: {type(xlsx_input)}"
+    )
+
 
 def insert_raw(
     engine,
@@ -61,29 +92,27 @@ def insert_raw(
 
 
 # =========================================================
-# MAIN ETL (API-STABLE)
+# MAIN ETL (RESILIENTE)
 # =========================================================
 
 def run_etl(
-    xlsx_path: str | Path,
+    xlsx_path,
     contract_path: str | Path,
     snapshot_date: date | None = None,
 ):
     """
-    Executa ETL MLS completo.
-
-    snapshot_date:
-    - opcional
-    - default = hoje
+    ETL MLS resiliente:
+    - aceita UploadedFile ou Path
+    - snapshot_date opcional
     """
 
-    # --- defaults resilientes ---
     snapshot_date = snapshot_date or date.today()
 
     engine = get_engine()
     import_id = uuid4()
 
-    xlsx_path = Path(xlsx_path)
+    # --- normalização crítica ---
+    xlsx_path = _normalize_xlsx_input(xlsx_path)
     contract_path = Path(contract_path)
 
     # 1. RAW (pai)
