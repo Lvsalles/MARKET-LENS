@@ -1,20 +1,23 @@
-"""
-Market Lens — Streamlit ETL Runner (Cloud-first)
-
-Função:
-- Interface simples para rodar o ETL
-- Upload de arquivos MLS (.xlsx)
-- Visualizar resultado básico
-"""
-
 import streamlit as st
-import pandas as pd
+
+# -------------------------------------------------
+# DEBUG GUARANTEE
+# -------------------------------------------------
+st.write("✅ Streamlit carregou o arquivo streamlit_app.py")
+
+try:
+    st.write("🔍 Tentando importar ETL...")
+    from backend.etl import run_etl
+    st.success("Import do ETL: OK")
+
+except Exception as e:
+    st.error("❌ Erro ao importar backend.etl")
+    st.exception(e)
+    st.stop()
+
 from datetime import date
-from pathlib import Path
 import tempfile
-
-from backend.etl import run_etl
-
+import pandas as pd
 
 # -------------------------------------------------
 # Page config
@@ -24,16 +27,24 @@ st.set_page_config(
     layout="wide",
 )
 
+st.title("🏗️ Market Lens — MLS ETL (DEBUG MODE)")
+st.caption("Diagnóstico de tela branca")
 
 # -------------------------------------------------
-# Header
+# Teste de variável de ambiente
 # -------------------------------------------------
-st.title("🏗️ Market Lens — MLS ETL")
-st.caption("Upload de arquivos MLS (.xlsx) e ingestão no banco")
+st.subheader("🔐 Environment Check")
 
+import os
+db_url = os.getenv("DATABASE_URL")
+
+if not db_url:
+    st.error("DATABASE_URL NÃO está definida no ambiente ❌")
+else:
+    st.success("DATABASE_URL encontrada ✅")
 
 # -------------------------------------------------
-# File upload
+# Upload
 # -------------------------------------------------
 uploaded_files = st.file_uploader(
     "Selecione um ou mais arquivos XLSX",
@@ -41,25 +52,16 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True,
 )
 
-run_button = st.button("▶️ Rodar ETL")
-
-
-# -------------------------------------------------
-# Run ETL
-# -------------------------------------------------
-if run_button and uploaded_files:
+if st.button("▶️ Rodar ETL (DEBUG)") and uploaded_files:
     with st.spinner("Processando arquivos..."):
-        temp_paths = []
-
         try:
-            # salvar arquivos temporários (necessário no Streamlit)
+            temp_paths = []
             for f in uploaded_files:
                 tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
                 tmp.write(f.read())
                 tmp.close()
                 temp_paths.append(tmp.name)
 
-            # executar ETL
             df = run_etl(
                 xlsx_files=temp_paths,
                 snapshot_date=date.today(),
@@ -67,26 +69,8 @@ if run_button and uploaded_files:
             )
 
             st.success("ETL executado com sucesso!")
-
-            # -------------------------------------------------
-            # Summary
-            # -------------------------------------------------
-            st.subheader("Resumo por Asset Class e Status")
-            summary = (
-                df.groupby(["asset_class", "status_group"])
-                .size()
-                .reset_index(name="total")
-            )
-            st.dataframe(summary, use_container_width=True)
-
-            # -------------------------------------------------
-            # Preview
-            # -------------------------------------------------
-            st.subheader("Preview dos dados ingeridos")
-            st.dataframe(df.head(50), use_container_width=True)
+            st.dataframe(df.head(20))
 
         except Exception as e:
-            st.error(f"Erro ao executar ETL: {e}")
-
-else:
-    st.info("Faça upload de pelo menos um arquivo XLSX para iniciar.")
+            st.error("❌ Erro durante execução do ETL")
+            st.exception(e)
