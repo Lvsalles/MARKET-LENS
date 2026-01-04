@@ -11,8 +11,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
-# Importamos 'date' explicitamente para garantir a tipagem no banco
-from datetime import date
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
@@ -48,6 +46,7 @@ def get_engine() -> Engine:
 
 
 def _table_columns(engine: Engine, table: str, schema: str = "public") -> set[str]:
+    """Retorna o conjunto de nomes de colunas reais de uma tabela no banco."""
     sql = text("""
         SELECT column_name
         FROM information_schema.columns
@@ -85,7 +84,7 @@ def _safe_json(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # =========================================================
-# NOVO: CREATE IMPORT RECORD (Resolve o erro de ForeignKey)
+# CREATE IMPORT RECORD (CORRIGIDO: Agora é dinâmico)
 # =========================================================
 
 def _create_import_record(
@@ -98,25 +97,39 @@ def _create_import_record(
     schema: str = "public"
 ):
     """
-    Cria o registro pai na tabela stg_mls_imports para permitir 
-    que as tabelas filhas (raw e classified) usem o import_id.
+    Cria o registro pai. Verifica quais colunas existem para evitar 
+    erros de 'UndefinedColumn'.
     """
+    cols = _table_columns(engine, "stg_mls_imports", schema)
+    
+    # Dados possíveis para inserção
+    data = {
+        "import_id": import_id,
+        "source_file": source_file,
+        "source_tag": source_tag,
+        "snapshot_date": snapshot_date
+    }
+    
+    # Filtramos apenas as chaves que realmente existem na tabela stg_mls_imports
+    insert_data = {k: v for k, v in data.items() if k in cols}
+    
+    if not insert_data:
+        raise RuntimeError("Nenhuma coluna compatível encontrada em stg_mls_imports")
+
+    col_names = ", ".join(insert_data.keys())
+    placeholders = ", ".join([f":{k}" for k in insert_data.keys()])
+
     sql = text(f"""
-        INSERT INTO {schema}.stg_mls_imports (import_id, source_file, source_tag, snapshot_date)
-        VALUES (:import_id, :source_file, :source_tag, :snapshot_date)
+        INSERT INTO {schema}.stg_mls_imports ({col_names})
+        VALUES ({placeholders})
     """)
     
     with engine.begin() as conn:
-        conn.execute(sql, {
-            "import_id": import_id,
-            "source_file": source_file,
-            "source_tag": source_tag,
-            "snapshot_date": snapshot_date
-        })
+        conn.execute(sql, insert_data)
 
 
 # =========================================================
-# RAW INSERT (Corrigido com row_json)
+# RAW INSERT (Corrigido com row_json e dinâmico)
 # =========================================================
 
 def _insert_stg_mls_raw(
@@ -137,17 +150,12 @@ def _insert_stg_mls_raw(
     if missing:
         raise RuntimeError(f"stg_mls_raw missing required columns: {missing}")
 
-    insert_cols = [
-        c for c in [
-            "import_id",
-            "source_file",
-            "source_tag",
-            "row_number",
-            "row_hash",
-            "row_json",
-        ]
-        if c in cols
+    # Mapeamos as colunas que vamos tentar inserir
+    potential_cols = [
+        "import_id", "source_file", "source_tag", 
+        "row_number", "row_hash", "row_json"
     ]
+    insert_cols = [c for c in potential_cols if c in cols]
 
     rows: List[Dict[str, Any]] = []
 
@@ -168,6 +176,7 @@ def _insert_stg_mls_raw(
         if "row_json" in cols:
             row_data["row_json"] = json.dumps(clean_dict)
 
+        # Garante que só enviamos colunas que existem
         rows.append({k: row_data[k] for k in insert_cols})
 
     if not rows:
@@ -206,7 +215,10 @@ def _insert_stg_mls_classified(
 
     df = df.copy()
     df["import_id"] = import_id
-    df = df[[c for c in df.columns if c in cols]]
+    
+    # Filtra colunas do DataFrame que não existem na tabela
+    valid_cols = [c for c in df.columns if c in cols]
+    df = df[valid_cols]
     df = df.where(pd.notnull(df), None)
 
     if df.empty:
@@ -225,7 +237,7 @@ def _insert_stg_mls_classified(
 
 
 # =========================================================
-# MAIN ETL (ATUALIZADO)
+# MAIN ETL
 # =========================================================
 
 def run_etl(
@@ -247,7 +259,7 @@ def run_etl(
         import_id = str(uuid.uuid4())
         filename = xlsx_path.name
 
-        # 1. PRIMEIRO: Criamos o registro de importação (Resolve o erro de FK)
+        # 1. Cria o registro pai (Agora detecta colunas automaticamente)
         _create_import_record(
             engine=engine,
             import_id=import_id,
@@ -257,10 +269,10 @@ def run_etl(
             schema=schema
         )
 
-        # 2. SEGUNDO: Lemos o Excel
+        # 2. Lê o Excel
         df_raw = pd.read_excel(xlsx_path, engine="openpyxl")
 
-        # 3. TERCEIRO: Inserimos os dados brutos
+        # 3. Insere os dados brutos
         raw_count = _insert_stg_mls_raw(
             engine=engine,
             import_id=import_id,
@@ -271,13 +283,14 @@ def run_etl(
             schema=schema,
         )
 
-        # 4. QUARTO: Processamento de IA e Classificação
+        # 4. Classificação e IA
         df_classified = classify_xlsx(
             xlsx_path=xlsx_path,
             contract_path=Path(contract_path),
             snapshot_date=snapshot_date,
         )
 
+        # 5. Insere os dados classificados
         classified_count = _insert_stg_mls_classified(
             engine=engine,
             import_id=import_id,
@@ -285,7 +298,7 @@ def run_etl(
             schema=schema,
         )
 
-        # Limpeza
+        # Limpeza do arquivo temporário
         if xlsx_path.exists():
             os.remove(xlsx_path)
 
