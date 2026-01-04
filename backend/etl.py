@@ -1,182 +1,169 @@
+# backend/etl.py
 from __future__ import annotations
 
+import json
+import uuid
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any, Dict, Optional
-from uuid import uuid4
-import json
+from typing import Any, Dict, Optional, Tuple
 
 import pandas as pd
-from sqlalchemy import text
+from sqlalchemy import text, inspect
+from sqlalchemy.engine import Engine
 
 from backend.db import get_engine
-from backend.core.mls_classify import classify_xlsx
+from backend.contracts.mls_classify import classify_xlsx
 
 
 @dataclass
 class ETLResult:
+    ok: bool
     import_id: str
-    filename: str
-    snapshot_date: str
-    asset_class: str
-    rows_classified: int
-    rows_inserted: int
-    summary: Dict[str, Any]
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "import_id": self.import_id,
-            "filename": self.filename,
-            "snapshot_date": self.snapshot_date,
-            "asset_class": self.asset_class,
-            "rows_classified": self.rows_classified,
-            "rows_inserted": self.rows_inserted,
-            "summary": self.summary,
-        }
+    inserted_raw: bool
+    inserted_classified_rows: int
+    error: Optional[str] = None
 
 
-def _make_summary(df: pd.DataFrame) -> Dict[str, Any]:
-    # Resumo robusto (não quebra se coluna não existir)
-    def safe_value_counts(col: str, top: int = 10):
-        if col not in df.columns:
-            return {}
-        vc = df[col].fillna("").astype(str).value_counts().head(top)
-        return {k: int(v) for k, v in vc.items()}
+# -----------------------------
+# Helpers: schema-safe inserts
+# -----------------------------
 
-    summary = {
-        "status_group": safe_value_counts("status_group", 20),
-        "status_raw": safe_value_counts("status_raw", 20),
-        "zip_top": safe_value_counts("zip", 20),
-        "city_top": safe_value_counts("city", 20),
-        "county_top": safe_value_counts("county", 20),
-        "price": {},
-    }
-
-    # price ranges
-    for col in ["list_price", "close_price"]:
-        if col in df.columns:
-            s = pd.to_numeric(df[col], errors="coerce").dropna()
-            if len(s) > 0:
-                summary["price"][col] = {
-                    "min": float(s.min()),
-                    "p25": float(s.quantile(0.25)),
-                    "median": float(s.median()),
-                    "p75": float(s.quantile(0.75)),
-                    "max": float(s.max()),
-                }
-            else:
-                summary["price"][col] = {}
-
-    return summary
+def _table_columns(engine: Engine, table_name: str, schema: str = "public") -> set[str]:
+    insp = inspect(engine)
+    cols = insp.get_columns(table_name, schema=schema)
+    return {c["name"] for c in cols}
 
 
-def _insert_stg_mls_raw(engine, import_id: str) -> None:
-    # Mantém o mínimo para não quebrar com schemas diferentes
-    sql = text("""
-        insert into stg_mls_raw (import_id, imported_at)
-        values (:import_id, now())
-        on conflict (import_id) do nothing;
-    """)
+def _safe_insert_one(
+    engine: Engine,
+    table: str,
+    payload: Dict[str, Any],
+    conflict_cols: Optional[Tuple[str, ...]] = None,
+    schema: str = "public",
+) -> bool:
+    """
+    Inserts only keys that exist as real columns in Postgres.
+    Returns True if executed (or would be a no-op due to conflict).
+    """
+    existing = _table_columns(engine, table, schema=schema)
+    filtered = {k: v for k, v in payload.items() if k in existing}
+
+    if not filtered:
+        # Nothing to insert based on actual schema
+        return False
+
+    cols = list(filtered.keys())
+    params = {k: filtered[k] for k in cols}
+
+    col_sql = ", ".join(cols)
+    val_sql = ", ".join([f":{c}" for c in cols])
+
+    if conflict_cols:
+        conflict_sql = f" ON CONFLICT ({', '.join(conflict_cols)}) DO NOTHING"
+    else:
+        conflict_sql = ""
+
+    sql = text(f"INSERT INTO {schema}.{table} ({col_sql}) VALUES ({val_sql}){conflict_sql};")
+
     with engine.begin() as conn:
-        conn.execute(sql, {"import_id": import_id})
+        conn.execute(sql, params)
+    return True
 
 
-def _insert_stg_mls_classified(engine, df: pd.DataFrame) -> int:
-    # pandas to_sql (append)
-    # garantir que import_id exista no DF e esteja como str
-    inserted = 0
+def _safe_insert_many(
+    engine: Engine,
+    table: str,
+    df: pd.DataFrame,
+    schema: str = "public",
+) -> int:
+    """
+    Bulk insert using only existing columns.
+    Uses executemany with SQLAlchemy text.
+    """
+    if df.empty:
+        return 0
+
+    existing = _table_columns(engine, table, schema=schema)
+    use_cols = [c for c in df.columns if c in existing]
+    if not use_cols:
+        return 0
+
+    df2 = df[use_cols].copy()
+
+    col_sql = ", ".join(use_cols)
+    val_sql = ", ".join([f":{c}" for c in use_cols])
+
+    sql = text(f"INSERT INTO {schema}.{table} ({col_sql}) VALUES ({val_sql});")
+
+    records = df2.to_dict(orient="records")
     with engine.begin() as conn:
-        df.to_sql("stg_mls_classified", conn, if_exists="append", index=False, method="multi", chunksize=1000)
-        inserted = len(df)
-    return inserted
+        conn.execute(sql, records)
+    return len(records)
 
 
-def _save_report(engine, result: ETLResult) -> None:
-    sql = text("""
-        insert into etl_import_reports (
-          import_id, snapshot_date, filename, asset_class,
-          rows_classified, rows_inserted, summary
-        )
-        values (
-          :import_id::uuid, :snapshot_date::date, :filename, :asset_class,
-          :rows_classified, :rows_inserted, :summary::jsonb
-        )
-        on conflict (import_id) do update set
-          snapshot_date = excluded.snapshot_date,
-          filename = excluded.filename,
-          asset_class = excluded.asset_class,
-          rows_classified = excluded.rows_classified,
-          rows_inserted = excluded.rows_inserted,
-          summary = excluded.summary;
-    """)
-    with engine.begin() as conn:
-        conn.execute(sql, {
-            "import_id": result.import_id,
-            "snapshot_date": result.snapshot_date,
-            "filename": result.filename,
-            "asset_class": result.asset_class,
-            "rows_classified": result.rows_classified,
-            "rows_inserted": result.rows_inserted,
-            "summary": json.dumps(result.summary),
-        })
-
+# -----------------------------
+# Core ETL
+# -----------------------------
 
 def run_etl(
-    *,
     xlsx_path: str | Path,
-    snapshot_date: date,
+    *,
     contract_path: str | Path,
-    preview_rows: int = 0,
-) -> Dict[str, Any]:
+    snapshot_date: Optional[date] = None,
+    engine: Optional[Engine] = None,
+) -> ETLResult:
     """
-    Executa o pipeline:
-    - gera import_id UUID
-    - grava stg_mls_raw
-    - classifica XLSX -> df_classified
-    - injeta import_id em cada linha
-    - grava stg_mls_classified
-    - gera e salva report em etl_import_reports
-    Retorna dict com resumo (e preview opcional).
+    End-to-end:
+      1) Create import_id (UUID)
+      2) Insert into stg_mls_raw (schema-safe)
+      3) Classify XLSX into DataFrame
+      4) Add import_id to classified df
+      5) Insert into stg_mls_classified (schema-safe)
     """
-    engine = get_engine()
+    try:
+        engine = engine or get_engine()
+        snapshot_date = snapshot_date or date.today()
 
-    xlsx_path = Path(xlsx_path)
-    contract_path = Path(contract_path)
+        xlsx_path = Path(xlsx_path)
+        contract_path = Path(contract_path)
 
-    import_id = str(uuid4())
+        import_id = str(uuid.uuid4())
 
-    # 1) cria a "raiz" no raw (para FK)
-    _insert_stg_mls_raw(engine, import_id)
+        # 1) Insert raw record (ONLY what exists in DB)
+        inserted_raw = _safe_insert_one(
+            engine,
+            "stg_mls_raw",
+            payload={
+                "import_id": import_id,
+                "filename": xlsx_path.name,
+                "snapshot_date": snapshot_date,
+                "imported_at": snapshot_date,  # if column exists & is date; otherwise ignored
+            },
+            conflict_cols=("import_id",),
+        )
 
-    # 2) classifica
-    df = classify_xlsx(xlsx_path=xlsx_path, contract_path=contract_path, snapshot_date=snapshot_date)
+        # 2) Classify file
+        df = classify_xlsx(xlsx_path=xlsx_path, contract_path=contract_path, snapshot_date=snapshot_date)
 
-    # 3) injeta import_id (FK)
-    df.insert(0, "import_id", import_id)
+        # 3) Attach FK
+        df["import_id"] = import_id
 
-    asset_class = str(df["asset_class"].iloc[0]) if "asset_class" in df.columns and len(df) else "unknown"
-    summary = _make_summary(df)
+        # 4) Insert classified rows
+        inserted_rows = _safe_insert_many(engine, "stg_mls_classified", df)
 
-    # 4) grava classified
-    rows_inserted = _insert_stg_mls_classified(engine, df)
+        return ETLResult(
+            ok=True,
+            import_id=import_id,
+            inserted_raw=inserted_raw,
+            inserted_classified_rows=inserted_rows,
+        )
 
-    # 5) salva report
-    result = ETLResult(
-        import_id=import_id,
-        filename=xlsx_path.name,
-        snapshot_date=str(snapshot_date),
-        asset_class=asset_class,
-        rows_classified=len(df),
-        rows_inserted=rows_inserted,
-        summary=summary,
-    )
-    _save_report(engine, result)
-
-    payload = result.to_dict()
-
-    # preview opcional
-    if preview_rows and preview_rows > 0:
-        payload["preview"] = df.head(preview_rows).to_dict(orient="records")
-
-    return payload
+    except Exception as e:
+        return ETLResult(
+            ok=False,
+            import_id="",
+            inserted_raw=False,
+            inserted_classified_rows=0,
+            error=str(e),
+        )
