@@ -1,11 +1,11 @@
 """
-Market Lens — MLS ETL (Cloud-first, FK-safe)
+Market Lens — MLS ETL (Cloud-first, FK-safe, resilient)
 
 Pipeline:
 1) Gera import_id (UUID)
 2) Insere RAW (stg_mls_raw)
 3) Classifica XLSX
-4) Insere CLASSIFIED (stg_mls_classified) usando o mesmo import_id
+4) Insere CLASSIFIED (stg_mls_classified)
 """
 
 from __future__ import annotations
@@ -21,9 +21,8 @@ from backend.db import get_engine
 from backend.core.mls_classify import classify_xlsx
 
 
-
 # =========================================================
-# Helpers
+# RAW insert (PAI)
 # =========================================================
 
 def insert_raw(
@@ -33,9 +32,6 @@ def insert_raw(
     filename: str,
     snapshot_date: date,
 ):
-    """
-    Insere uma linha em stg_mls_raw (tabela pai)
-    """
     sql = text(
         """
         INSERT INTO stg_mls_raw (
@@ -65,28 +61,32 @@ def insert_raw(
 
 
 # =========================================================
-# Main ETL
+# MAIN ETL (API-STABLE)
 # =========================================================
 
 def run_etl(
     xlsx_path: str | Path,
     contract_path: str | Path,
-    snapshot_date: date,
+    snapshot_date: date | None = None,
 ):
+    """
+    Executa ETL MLS completo.
 
+    snapshot_date:
+    - opcional
+    - default = hoje
     """
-    Executa o ETL completo para um arquivo MLS
-    """
+
+    # --- defaults resilientes ---
+    snapshot_date = snapshot_date or date.today()
 
     engine = get_engine()
-
-    # 1. Gerar import_id único
     import_id = uuid4()
 
     xlsx_path = Path(xlsx_path)
     contract_path = Path(contract_path)
 
-    # 2. Inserir RAW (PAI)
+    # 1. RAW (pai)
     insert_raw(
         engine,
         import_id=import_id,
@@ -94,7 +94,7 @@ def run_etl(
         snapshot_date=snapshot_date,
     )
 
-    # 3. Classificar XLSX
+    # 2. CLASSIFY
     classified_df = classify_xlsx(
         xlsx_path=xlsx_path,
         contract_path=contract_path,
@@ -104,10 +104,9 @@ def run_etl(
     if classified_df.empty:
         raise ValueError("Classified DataFrame is empty")
 
-    # 4. Anexar import_id (UUID)
     classified_df["import_id"] = str(import_id)
 
-    # 5. Inserir CLASSIFIED (FILHO)
+    # 3. CLASSIFIED (filho)
     classified_df.to_sql(
         "stg_mls_classified",
         engine,
@@ -118,6 +117,8 @@ def run_etl(
     )
 
     return {
+        "status": "success",
         "import_id": str(import_id),
         "rows_inserted": len(classified_df),
+        "snapshot_date": snapshot_date.isoformat(),
     }
