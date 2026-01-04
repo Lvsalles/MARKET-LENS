@@ -1,6 +1,5 @@
 # ============================================================
 # Market Lens — MLS Import (Streamlit)
-# Cloud-first, resilient, deterministic
 # ============================================================
 
 from __future__ import annotations
@@ -11,8 +10,9 @@ from pathlib import Path
 
 import streamlit as st
 
+
 # ============================================================
-# Safe backend import
+# Backend import (safe)
 # ============================================================
 
 try:
@@ -24,7 +24,7 @@ except Exception as e:
 
 
 # ============================================================
-# Streamlit Page Config
+# Page config
 # ============================================================
 
 st.set_page_config(
@@ -43,8 +43,19 @@ if not BACKEND_OK:
     st.error("❌ Backend não pôde ser carregado")
     st.exception(BACKEND_ERROR)
     st.stop()
-else:
-    st.success("Backend carregado com sucesso")
+
+st.success("Backend carregado com sucesso")
+
+
+# ============================================================
+# FIXO E OBRIGATÓRIO — CONTRACT PATH
+# ============================================================
+
+CONTRACT_PATH = Path("backend/contracts/mls_column_contract.yaml")
+
+if not CONTRACT_PATH.exists():
+    st.error(f"Contrato não encontrado: {CONTRACT_PATH}")
+    st.stop()
 
 
 # ============================================================
@@ -74,27 +85,28 @@ if st.button("Run ETL"):
 
     try:
         # ----------------------------------------------------
-        # Persist uploaded file to temp path (CRITICAL FIX)
+        # Persist uploaded file to temp path (CRÍTICO)
         # ----------------------------------------------------
         with tempfile.NamedTemporaryFile(
             delete=False,
             suffix=".xlsx"
         ) as tmp:
             tmp.write(uploaded_file.getbuffer())
-            tmp_path = Path(tmp.name)
+            xlsx_path = Path(tmp.name)
 
         # ----------------------------------------------------
-        # Run ETL
+        # Run ETL (CONTRATO COMPLETO)
         # ----------------------------------------------------
         result = run_etl(
-            xlsx_path=tmp_path,
+            xlsx_path=xlsx_path,
             snapshot_date=snapshot_date,
+            contract_path=CONTRACT_PATH,
         )
 
         st.success("ETL finished successfully!")
 
         # ----------------------------------------------------
-        # Optional result rendering (SAFE)
+        # Render result safely
         # ----------------------------------------------------
         if isinstance(result, dict):
             st.markdown(
