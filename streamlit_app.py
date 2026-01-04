@@ -1,38 +1,49 @@
 import streamlit as st
-import tempfile
-from pathlib import Path
 
-from backend.etl import run_etl
+st.set_page_config(page_title="Market Lens — DIAGNOSTIC", layout="centered")
 
-st.set_page_config(page_title="Market Lens — MLS ETL", layout="centered")
+st.title("Market Lens — Diagnostic Mode")
 
-st.title("Market Lens — MLS ETL")
+st.write("✅ Streamlit iniciou")
 
-uploaded_file = st.file_uploader(
-    "Upload de arquivos MLS (.xlsx)",
-    type=["xlsx"],
-)
+# -------------------------------------------------
+# Teste 1 — imports básicos
+# -------------------------------------------------
+try:
+    from pathlib import Path
+    st.write("✅ pathlib OK")
+except Exception as e:
+    st.error("❌ erro em pathlib")
+    st.exception(e)
+    st.stop()
 
+# -------------------------------------------------
+# Teste 2 — backend import
+# -------------------------------------------------
+try:
+    from backend.etl import run_etl
+    st.write("✅ backend.etl importado")
+except Exception as e:
+    st.error("❌ ERRO AO IMPORTAR backend.etl")
+    st.exception(e)
+    st.stop()
+
+# -------------------------------------------------
+# Teste 3 — contrato existe
+# -------------------------------------------------
 contract_path = Path("backend/contracts/mls_contract.yml")
+st.write("📄 Caminho do contrato:", str(contract_path))
 
-if uploaded_file:
-    st.info("Iniciando ETL...")
+if not contract_path.exists():
+    st.error("❌ CONTRATO NÃO EXISTE")
+    st.stop()
 
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-            tmp.write(uploaded_file.read())
-            tmp_path = Path(tmp.name)
+st.write("✅ Contrato encontrado")
 
-        st.write(f"Arquivo temporário: {tmp_path.name}")
+# -------------------------------------------------
+# UI mínima
+# -------------------------------------------------
+st.divider()
+st.success("🎯 Streamlit está funcionando corretamente")
 
-        result = run_etl(
-            xlsx_path=tmp_path,
-            contract_path=contract_path,
-        )
-
-        st.success("ETL finalizado com sucesso!")
-        st.json(result)
-
-    except Exception as e:
-        st.error("Erro inesperado na execução do ETL")
-        st.exception(e)
+st.write("Se você está vendo esta mensagem, o problema NÃO é Streamlit.")
