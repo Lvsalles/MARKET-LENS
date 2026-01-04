@@ -46,6 +46,7 @@ def get_engine() -> Engine:
 
 
 def _table_columns(engine: Engine, table: str, schema: str = "public") -> set[str]:
+    """Detecta dinamicamente as colunas da tabela no banco de dados."""
     sql = text("""
         SELECT column_name
         FROM information_schema.columns
@@ -95,6 +96,7 @@ def _create_import_record(
     snapshot_date: date,
     schema: str = "public"
 ):
+    """Cria o registro mestre da importação."""
     cols = _table_columns(engine, "stg_mls_imports", schema)
     data = {
         "import_id": import_id,
@@ -102,10 +104,12 @@ def _create_import_record(
         "source_tag": source_tag,
         "snapshot_date": snapshot_date
     }
+    
+    # Insere apenas colunas que existem na tabela stg_mls_imports
     insert_data = {k: v for k, v in data.items() if k in cols}
     
     if not insert_data:
-        raise RuntimeError("No compatible columns in stg_mls_imports")
+        raise RuntimeError("Tabela stg_mls_imports não possui colunas compatíveis.")
 
     sql = text(f"""
         INSERT INTO {schema}.stg_mls_imports ({", ".join(insert_data.keys())})
@@ -117,7 +121,7 @@ def _create_import_record(
 
 
 # =========================================================
-# RAW INSERT (REVISADO: ON CONFLICT ajustado para a nova PK)
+# RAW INSERT
 # =========================================================
 
 def _insert_stg_mls_raw(
@@ -132,9 +136,8 @@ def _insert_stg_mls_raw(
 ) -> int:
 
     cols = _table_columns(engine, "stg_mls_raw", schema)
-
-    # Identifica o alvo do conflito. 
-    # Se você rodou o SQL do Passo 1, o alvo agora é (import_id, row_number)
+    
+    # Alvo do conflito agora é composto (import_id + row_number)
     conflict_target = "import_id, row_number"
     
     potential_cols = ["import_id", "source_file", "source_tag", "row_number", "row_hash", "row_json"]
@@ -189,6 +192,7 @@ def _insert_stg_mls_classified(
     df = df.copy()
     df["import_id"] = import_id
     
+    # Filtra colunas que não existem na tabela de destino
     valid_cols = [c for c in df.columns if c in cols]
     df = df[valid_cols]
     df = df.where(pd.notnull(df), None)
@@ -230,7 +234,7 @@ def run_etl(
         import_id = str(uuid.uuid4())
         filename = xlsx_path.name
 
-        # 1. Cria registro pai
+        # 1. Cria o registro PAI primeiro para evitar erro de Foreign Key
         _create_import_record(
             engine=engine,
             import_id=import_id,
@@ -240,10 +244,10 @@ def run_etl(
             schema=schema
         )
 
-        # 2. Lê Excel
+        # 2. Processa o arquivo Excel
         df_raw = pd.read_excel(xlsx_path, engine="openpyxl")
 
-        # 3. Insere Raw (Onde estava o erro de UniqueViolation)
+        # 3. Insere dados brutos (RAW)
         raw_count = _insert_stg_mls_raw(
             engine=engine,
             import_id=import_id,
@@ -254,14 +258,14 @@ def run_etl(
             schema=schema,
         )
 
-        # 4. Classificação
+        # 4. Classificação dos dados (IA / Regras de Negócio)
         df_classified = classify_xlsx(
             xlsx_path=xlsx_path,
             contract_path=Path(contract_path),
             snapshot_date=snapshot_date,
         )
 
-        # 5. Insere Classificados
+        # 5. Insere dados classificados
         classified_count = _insert_stg_mls_classified(
             engine=engine,
             import_id=import_id,
@@ -269,6 +273,7 @@ def run_etl(
             schema=schema,
         )
 
+        # Limpeza do arquivo temporário
         if xlsx_path.exists():
             os.remove(xlsx_path)
 
