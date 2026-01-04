@@ -36,8 +36,9 @@ if run_btn:
         )
 
         st.success("ETL finished successfully!")
-        st.write(result)   # 👈 NÃO st.json
-
-    except Exception as e:
-        st.error("Erro ao executar ETL")
-        st.exception(e)
+st.markdown(
+    f"""
+    **Import ID:** `{result.get("import_id")}`  
+    **Rows inserted:** `{result.get("rows_inserted")}`
+    """
+)
