@@ -85,7 +85,7 @@ def _safe_json(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # =========================================================
-# CREATE IMPORT RECORD
+# CREATE IMPORT RECORD (Obrigatório para manter a integridade)
 # =========================================================
 
 def _create_import_record(
@@ -107,7 +107,7 @@ def _create_import_record(
     }
     insert_data = {k: v for k, v in data.items() if k in cols}
     
-    if "import_id" not in insert_data:
+    if not insert_data:
         return 
 
     sql = text(f"""
@@ -121,7 +121,7 @@ def _create_import_record(
 
 
 # =========================================================
-# RAW INSERT
+# RAW INSERT (Fiel ao Schema: row_json e snapshot_date)
 # =========================================================
 
 def _insert_stg_mls_raw(
@@ -136,7 +136,12 @@ def _insert_stg_mls_raw(
 ) -> int:
 
     cols = _table_columns(engine, "stg_mls_raw", schema)
-    potential_cols = ["import_id", "source_file", "source_tag", "row_number", "row_hash", "row_json", "snapshot_date"]
+    
+    # Colunas baseadas no seu CREATE TABLE oficial
+    potential_cols = [
+        "import_id", "source_file", "source_tag", 
+        "row_number", "row_hash", "row_json", "snapshot_date"
+    ]
     insert_cols = [c for c in potential_cols if c in cols]
 
     rows: List[Dict[str, Any]] = []
@@ -174,7 +179,7 @@ def _insert_stg_mls_raw(
 
 
 # =========================================================
-# CLASSIFIED INSERT (TRATAMENTO DE NaN e NULLs)
+# CLASSIFIED INSERT (Tratamento de NaN para NUMERIC/DATE)
 # =========================================================
 
 def _insert_stg_mls_classified(
@@ -190,11 +195,12 @@ def _insert_stg_mls_classified(
     df = df.copy()
     df["import_id"] = import_id
     
-    # Filtra apenas as colunas que existem no banco
+    # Filtra apenas colunas que existem no banco de dados
     valid_cols = [c for c in df.columns if c in cols]
     df = df[valid_cols]
 
-    # Converte NaN para None (essencial para colunas numéricas do Postgres)
+    # TRATAMENTO DE DADOS: 
+    # Substitui NaN (do Pandas) por None (NULL no Banco) para não quebrar colunas NUMERIC e DATE
     df = df.replace({np.nan: None})
     records = df.to_dict(orient="records")
 
@@ -235,7 +241,7 @@ def run_etl(
         import_id = str(uuid.uuid4())
         filename = xlsx_path.name
 
-        # 1. Cria o registro PAI
+        # 1. Cria o registro PAI (Importante para integridade)
         _create_import_record(
             engine=engine,
             import_id=import_id,
@@ -259,14 +265,14 @@ def run_etl(
             schema=schema,
         )
 
-        # 4. Classificação e Processamento
+        # 4. Classificação e Processamento pela IA
         df_classified = classify_xlsx(
             xlsx_path=xlsx_path,
             contract_path=Path(contract_path),
             snapshot_date=snapshot_date,
         )
 
-        # 5. Insere dados Classificados
+        # 5. Insere dados Classificados (Análise Final)
         classified_count = _insert_stg_mls_classified(
             engine=engine,
             import_id=import_id,
@@ -274,7 +280,7 @@ def run_etl(
             schema=schema,
         )
 
-        # Limpeza
+        # Limpeza do arquivo temporário
         if xlsx_path.exists():
             os.remove(xlsx_path)
 
