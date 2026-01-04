@@ -6,4 +6,5 @@ python-dateutil
 numpy
 pyyaml
 openpyxl
+plotly
 google-generativeai
