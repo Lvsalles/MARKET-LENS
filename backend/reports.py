@@ -8,19 +8,18 @@ class MarketReports:
         self.engine = get_engine()
 
     def list_all_reports(self):
-        """Lists all existing isolated reports."""
         query = text("SELECT import_id, report_name, snapshot_date FROM public.stg_mls_imports ORDER BY imported_at DESC")
         with self.engine.connect() as conn:
             return pd.read_sql(query, conn)
 
     def load_report_data(self, import_id, asset_class):
-        """Loads data isolated by ID and Category (Properties/Land/Rental)."""
-        query = text("""
-            SELECT * FROM public.stg_mls_classified 
-            WHERE import_id = :id AND asset_class = :cls
-        """)
+        # Maps UI names to Database values
+        mapping = {"Properties": "Properties", "Land": "Land", "Rental": "Rental"}
+        db_cls = mapping.get(asset_class, "Properties")
+        
+        query = text("SELECT * FROM public.stg_mls_classified WHERE import_id = :id AND asset_class = :cls")
         with self.engine.connect() as conn:
-            return pd.read_sql(query, conn, params={"id": import_id, "cls": asset_class})
+            return pd.read_sql(query, conn, params={"id": import_id, "cls": db_cls})
 
     def get_inventory_overview(self, df):
         if df.empty: return pd.DataFrame()
