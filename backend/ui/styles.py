@@ -3,27 +3,25 @@ import streamlit as st
 def apply_premium_style():
     st.markdown("""
     <style>
-    /* Global Canvas */
+    /* Global Background */
     .stApp { background-color: #F0F4F8; }
     
-    /* Sidebar: Airy & Borderless (Google AI Studio Style) */
+    /* Sidebar: Google AI Studio Style */
     section[data-testid="stSidebar"] {
         background-color: #F8FAFC !important;
         border-right: 1px solid #E2E8F0 !important;
-        width: 320px !important;
     }
     
-    /* Sidebar Buttons */
+    /* Airy Sidebar Buttons */
     .stButton > button {
         border: none !important;
         background-color: transparent !important;
         color: #475569 !important;
         text-align: left !important;
-        padding: 12px 20px !important;
-        border-radius: 10px !important;
+        padding: 10px 20px !important;
         width: 100% !important;
         font-weight: 500 !important;
-        transition: all 0.2s;
+        transition: 200ms;
     }
     .stButton > button:hover {
         background-color: #EEF2FF !important;
@@ -31,17 +29,17 @@ def apply_premium_style():
         box-shadow: inset 4px 0px 0px #4F46E5 !important;
     }
 
-    /* Floating Cards */
+    /* Cards */
     .main-card {
         background-color: #FFFFFF;
         padding: 24px;
         border-radius: 16px;
         box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03);
-        border: 1px solid rgba(226, 232, 240, 0.8);
+        border: 1px solid #E2E8F0;
         margin-bottom: 20px;
     }
 
-    /* Modern Pill Tabs */
+    /* Pill Tabs */
     .stTabs [data-baseweb="tab-list"] { gap: 10px; }
     .stTabs [data-baseweb="tab"] {
         background-color: #FFFFFF;
