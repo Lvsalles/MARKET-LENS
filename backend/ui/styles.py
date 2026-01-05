@@ -6,14 +6,14 @@ def apply_premium_style():
     /* Global Canvas */
     .stApp { background-color: #F0F4F8; }
     
-    /* Sidebar: Airy, Light Neutral, No Borders */
+    /* Sidebar: Airy & Borderless (Google AI Studio Style) */
     section[data-testid="stSidebar"] {
         background-color: #F8FAFC !important;
         border-right: 1px solid #E2E8F0 !important;
         width: 320px !important;
     }
     
-    /* Sidebar Buttons: borderless with left indicator */
+    /* Sidebar Buttons */
     .stButton > button {
         border: none !important;
         background-color: transparent !important;
@@ -21,9 +21,9 @@ def apply_premium_style():
         text-align: left !important;
         padding: 12px 20px !important;
         border-radius: 10px !important;
-        transition: all 200ms ease-in-out !important;
         width: 100% !important;
         font-weight: 500 !important;
+        transition: all 0.2s;
     }
     .stButton > button:hover {
         background-color: #EEF2FF !important;
@@ -31,7 +31,7 @@ def apply_premium_style():
         box-shadow: inset 4px 0px 0px #4F46E5 !important;
     }
 
-    /* Premium Floating Cards */
+    /* Floating Cards */
     .main-card {
         background-color: #FFFFFF;
         padding: 24px;
@@ -48,14 +48,12 @@ def apply_premium_style():
         border: 1px solid #E2E8F0;
         border-radius: 30px !important;
         padding: 8px 20px !important;
-        color: #64748B;
     }
     .stTabs [aria-selected="true"] {
         background-color: #4F46E5 !important;
         color: white !important;
     }
     
-    /* Thin Divider */
-    .nav-divider { height: 1px; background: #E2E8F0; margin: 20px 15px; opacity: 0.5; }
+    .nav-divider { height: 1px; background: #E2E8F0; margin: 15px 10px; opacity: 0.5; }
     </style>
     """, unsafe_allow_html=True)
