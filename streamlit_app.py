@@ -4,117 +4,125 @@ from backend.etl import run_etl_batch
 from backend.core.reports import MarketReports
 from backend.ui.styles import apply_premium_style
 
-# Initialize App
-st.set_page_config(page_title="Market Lens Enterprise", layout="wide")
+# 1. Page Config & Design
+st.set_page_config(page_title="Market Lens Enterprise", layout="wide", initial_sidebar_state="expanded")
 apply_premium_style()
+
+# 2. State Initialization
+if 'view' not in st.session_state: st.session_state.view = 'Reports'
+if 'active_report' not in st.session_state: st.session_state.active_report = None
 
 reports = MarketReports()
 
-# Navigation State
-if 'current_view' not in st.session_state: st.session_state.current_view = 'Reports'
-
 # --- SIDEBAR NAVIGATION ---
 with st.sidebar:
-    st.markdown("<h2 style='color:#4F46E5;'>Market Lens</h2>", unsafe_allow_html=True)
-    if st.button("➕ Create New Report", use_container_width=True, type="primary"):
-        st.session_state.current_view = 'New Report'
+    st.markdown("<h2 style='color:#4F46E5; font-size: 24px; padding-left: 10px;'>Market Lens</h2>", unsafe_allow_html=True)
+    
+    if st.button("✨ New Report"): st.session_state.view = 'New Report'
+    if st.button("📈 All Reports"): st.session_state.view = 'Reports'
+    
+    st.markdown("<p style='font-size: 12px; color: #94A3B8; margin-top: 20px; padding-left: 10px;'>ANALYTICS</p>", unsafe_allow_html=True)
+    if st.button("🏠 Properties"): st.session_state.view = 'Properties'
+    if st.button("🌳 Land"): st.session_state.view = 'Land'
+    if st.button("🏢 Rental"): st.session_state.view = 'Rental'
     
     st.markdown("---")
-    st.subheader("Select Saved Report")
-    try:
-        saved = reports.list_all_reports()
-        if not saved.empty:
-            report_options = {f"{r['report_name']} ({r['snapshot_date']})": r['import_id'] for _, r in saved.iterrows()}
-            selected_label = st.selectbox("Switch View:", options=list(report_options.keys()))
-            st.session_state.active_report_id = report_options[selected_label]
-            if st.button("👁️ View Report", use_container_width=True):
-                st.session_state.current_view = 'Properties'
-        else:
-            st.caption("No reports available.")
-    except:
-        st.error("Database connection failed.")
+    st.subheader("Active Report")
+    saved = reports.list_all_reports()
+    if not saved.empty:
+        opts = {f"{r['report_name']} ({r['snapshot_date']})": r['import_id'] for _, r in saved.iterrows()}
+        selected = st.selectbox("Switch Workspace:", options=list(opts.keys()), label_visibility="collapsed")
+        st.session_state.active_report = opts[selected]
+    else:
+        st.caption("No reports created yet.")
 
-# --- MAIN CONTENT AREA ---
-view = st.session_state.current_view
+# --- MAIN CONTENT ROUTING ---
 
-if view == 'New Report':
+# VIEW: NEW REPORT
+if st.session_state.view == 'New Report':
     st.title("Market Intelligence Ingestion")
-    st.caption("Upload up to 25 files. Each file must be classified for the isolated report.")
-
-    uploaded_files = st.file_uploader("Drop MLS files here (CSV/XLSX)", type=["csv", "xlsx"], accept_multiple_files=True)
+    st.caption("Guide: Upload up to 25 MLS files and classify them to generate an isolated intelligence report.")
     
-    if uploaded_files:
-        if len(uploaded_files) > 25:
-            st.error("Limit exceeded: Max 25 files.")
-        else:
-            report_name = st.text_input("Enter Report Name", placeholder="e.g. North Port Yearly Analysis 2025")
+    col_main, col_action = st.columns([3, 1])
+    
+    with col_main:
+        st.markdown("<div class='main-card'>", unsafe_allow_html=True)
+        files = st.file_uploader("Upload MLS Files", accept_multiple_files=True, type=['csv', 'xlsx'], label_visibility="collapsed")
+        
+        if files:
+            st.markdown("### 📋 File Classification Queue")
+            report_name = st.text_input("Report Name", placeholder="e.g. Sarasota Annual 2025")
             
-            st.markdown("### 📋 Classification Queue")
-            files_to_process = []
-            
-            # Display files in a clean grid
-            grid_cols = st.columns(2)
-            for idx, f in enumerate(uploaded_files):
-                with grid_cols[idx % 2]:
-                    st.markdown(f"""
-                        <div style='background: white; padding: 15px; border-radius: 12px; border: 1px solid #E2E8F0; margin-bottom: 5px;'>
-                            <b style='color: #1E293B;'>📄 {f.name}</b><br>
-                            <small>Size: {f.size/1024:.1f} KB</small>
-                        </div>
-                    """, unsafe_allow_html=True)
-                    
-                    f_type = st.selectbox(
-                        f"Select type for {f.name}", 
-                        ["Properties", "Land", "Rental", "Market Analysis"], 
-                        key=f"type_{f.name}", label_visibility="collapsed"
-                    )
-                    files_to_process.append({'file': f, 'type': f_type})
-            
-            st.markdown("---")
-            if st.button("🚀 Run Batch ETL & Generate Isolated Report", type="primary", use_container_width=True):
-                if not report_name:
-                    st.warning("Please name your report before processing.")
-                else:
-                    with st.spinner(f"Ingesting {len(files_to_process)} files..."):
-                        res = run_etl_batch(
-                            files_data=files_to_process, 
-                            report_name=report_name, 
-                            snapshot_date=date.today(),
-                            contract_path="backend/contract/mls_column_contract.yaml"
-                        )
-                        if res.ok:
-                            st.success("Batch ETL Completed!")
-                            st.session_state.active_report_id = res.import_id
-                            st.session_state.current_view = 'Properties'
-                            st.rerun()
-                        else:
-                            st.error(res.error)
+            files_data = []
+            for f in files:
+                c1, c2 = st.columns([2, 1])
+                c1.markdown(f"**📄 {f.name}**")
+                f_type = c2.selectbox("Type", ["Properties", "Land", "Rental"], key=f"type_{f.name}")
+                files_data.append({'file': f, 'type': f_type})
+        st.markdown("</div>", unsafe_allow_html=True)
 
-elif view == 'Properties':
-    if 'active_report_id' in st.session_state:
-        df = reports.load_report_data(st.session_state.active_report_id)
-        st.title("Market Analysis Workspace")
-        st.caption(f"Active Report ID: {st.session_state.active_report_id}")
+    with col_action:
+        st.markdown("### Next Actions")
+        # Visual Action Panel
+        has_files = len(files) > 0 if files else False
+        st.markdown(f"1. Validate Schema {'🟢' if has_files else '⚪'}")
+        st.markdown(f"2. Normalize Data {'🟡' if has_files else '⚪'}")
+        st.markdown(f"3. Run ETL {'🔒' if not has_files else '🟡'}")
+        
+        if files and report_name:
+            if st.button("🚀 Execute Processing", type="primary", use_container_width=True):
+                with st.spinner("Analyzing and Ingesting..."):
+                    res = run_etl_batch(files_data=files_data, report_name=report_name, snapshot_date=date.today(), contract_path="backend/contract/mls_column_contract.yaml")
+                    if res.ok:
+                        st.session_state.active_report = res.import_id
+                        st.session_state.view = 'Properties'
+                        st.rerun()
+
+# VIEW: PROPERTIES
+elif st.session_state.view == 'Properties':
+    if st.session_state.active_report:
+        df = reports.load_report_data(st.session_state.active_report)
+        st.title("Properties Workspace")
         
         if not df.empty:
-            t1, t2, t3 = st.tabs(["Inventory Overview", "Size Analysis", "Year/Price Analysis"])
-            with t1:
-                st.markdown("<div class='main-card'>", unsafe_allow_html=True)
-                st.dataframe(reports.get_inventory_overview(df), use_container_width=True)
-                st.markdown("</div>", unsafe_allow_html=True)
-            with t2:
-                st.markdown("<div class='main-card'>", unsafe_allow_html=True)
-                size_df = reports.get_size_analysis(df)
-                st.dataframe(size_df.style.format({"AVERAGE VALUE": "${:,.2f}", "$/SQFT": "${:,.2f}"}), use_container_width=True)
-                st.markdown("</div>", unsafe_allow_html=True)
-            with t3:
-                st.markdown("<div class='main-card'>", unsafe_allow_html=True)
-                year_df = reports.get_year_analysis(df)
-                st.dataframe(year_df.style.format({"AVERAGE VALUE": "${:,.2f}"}), use_container_width=True)
-                st.markdown("</div>", unsafe_allow_html=True)
+            zips = ["Overview"] + sorted([str(z) for z in df['zip'].unique()])
+            tabs = st.tabs(zips)
+            
+            for i, tab in enumerate(tabs):
+                with tab:
+                    if zips[i] == "Overview":
+                        st.markdown("<div class='main-card'>", unsafe_allow_html=True)
+                        st.subheader("Market Summary")
+                        st.dataframe(reports.get_inventory_overview(df), use_container_width=True)
+                        st.markdown("</div>", unsafe_allow_html=True)
+                    else:
+                        st.markdown("<div class='main-card'>", unsafe_allow_html=True)
+                        st.subheader(f"ZIP Code {zips[i]} Analysis")
+                        st.dataframe(df[df['zip'].astype(str) == zips[i]], use_container_width=True)
+                        st.markdown("</div>", unsafe_allow_html=True)
+        else:
+            st.info("The selected report contains no property data.")
     else:
-        st.info("Please select or create a report from the sidebar.")
+        st.warning("Please create or select a report to view analytics.")
 
+# VIEW: REPORTS GRID
 else:
-    st.title("Welcome to Market Lens")
-    st.write("Select a saved report from the sidebar or create a new one.")
+    st.title("Market Intelligence Hub")
+    if not saved.empty:
+        cols = st.columns(3)
+        for idx, r in saved.iterrows():
+            with cols[idx % 3]:
+                st.markdown(f"""
+                <div class='main-card'>
+                    <h4>{r['report_name']}</h4>
+                    <p style='color: #64748B;'>Snapshot: {r['snapshot_date']}</p>
+                    <hr style='opacity: 0.1;'>
+                    <span class='badge badge-ready'>Ready</span>
+                </div>
+                """, unsafe_allow_html=True)
+                if st.button(f"Open {r['report_name']}", key=r['import_id']):
+                    st.session_state.active_report = r['import_id']
+                    st.session_state.view = 'Properties'
+                    st.rerun()
+    else:
+        st.info("Your hub is empty. Create your first report to see insights.")
