@@ -37,14 +37,12 @@ def run_etl(*, xlsx_file: Any, report_name: str, snapshot_date: date, contract_p
             tmp.write(xlsx_file.getbuffer())
             file_path = Path(tmp.name)
 
-        # 1. Create ISOLATED Master Import Record
         with engine.begin() as conn:
             conn.execute(text("""
                 INSERT INTO public.stg_mls_imports (import_id, report_name, source_file, source_tag, snapshot_date) 
                 VALUES (:id, :name, :f, 'MLS', :d)
             """), {"id": import_id, "name": report_name, "f": xlsx_file.name, "d": snapshot_date})
 
-        # 2. Raw Data
         df_raw = pd.read_csv(file_path) if file_ext == '.csv' else pd.read_excel(file_path)
         raw_rows = []
         for i, (_, r) in enumerate(df_raw.iterrows(), start=1):
@@ -58,7 +56,6 @@ def run_etl(*, xlsx_file: Any, report_name: str, snapshot_date: date, contract_p
                 VALUES (:id, :n, :h, :j, :d) ON CONFLICT DO NOTHING
             """), raw_rows)
 
-        # 3. Classified Data
         df_class = classify_xlsx(xlsx_path=file_path, contract_path=Path(contract_path), snapshot_date=snapshot_date)
         df_class["import_id"] = import_id
         df_class["snapshot_date"] = snapshot_date
