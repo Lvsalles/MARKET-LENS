@@ -3,90 +3,102 @@ import streamlit as st
 def apply_premium_style():
     st.markdown("""
     <style>
-    /* Global Canvas: Very Light Blue/White to reduce fatigue */
+    /* Global Canvas - Very Light Professional Blue */
     .stApp {
-        background-color: #F4F7FA;
+        background-color: #F0F4F8;
     }
 
-    /* Sidebar: Airy, Light Neutral, No Borders */
+    /* Sidebar - Airy, Light Neutral, No Borders */
     section[data-testid="stSidebar"] {
         background-color: #F8FAFC !important;
-        border-right: none !important;
-        box-shadow: none !important;
-        width: 280px !important;
+        border-right: 1px solid #E2E8F0;
+        width: 300px !important;
     }
 
-    /* Sidebar Items: Smooth Hover & Indicator */
-    .stButton > button {
-        border: none;
-        background-color: transparent;
+    /* Sidebar Navigation Items */
+    .nav-item {
+        display: flex;
+        align-items: center;
+        padding: 12px 16px;
+        margin: 4px 12px;
+        border-radius: 8px;
         color: #475569;
-        text-align: left;
-        padding: 10px 16px;
-        border-radius: 10px;
+        text-decoration: none;
         transition: all 0.2s ease-in-out;
+        cursor: pointer;
         font-weight: 500;
-        width: 100%;
+        border-left: 4px solid transparent;
     }
 
-    .stButton > button:hover {
+    .nav-item:hover {
         background-color: #EEF2FF;
         color: #4F46E5;
-        box-shadow: inset 4px 0px 0px #4F46E5; /* Left indicator bar */
+        border-left: 4px solid #4F46E5;
     }
 
-    /* Active Sidebar Item */
-    div[data-testid="stSidebarNav"] .active {
-        background-color: #E0E7FF !important;
-        color: #4F46E5 !important;
-        font-weight: 600 !important;
+    .nav-active {
+        background-color: #E0E7FF;
+        color: #4F46E5;
+        font-weight: 600;
+        border-left: 4px solid #4F46E5;
     }
 
-    /* Main Floating Cards */
+    /* Sidebar Status Badges */
+    .status-dot {
+        height: 8px;
+        width: 8px;
+        border-radius: 50%;
+        display: inline-block;
+        margin-right: 10px;
+    }
+    .ready { background-color: #22C55E; }
+    .setup { background-color: #F59E0B; }
+    .locked { background-color: #94A3B8; }
+
+    /* Floating Content Cards */
     .main-card {
         background-color: #FFFFFF;
-        padding: 30px;
+        padding: 25px;
         border-radius: 16px;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03);
-        border: 1px solid rgba(226, 232, 240, 0.6);
-        margin-bottom: 24px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+        border: 1px solid rgba(226, 232, 240, 0.8);
+        margin-bottom: 20px;
     }
 
     /* Modern Pill Tabs */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 12px;
+        gap: 10px;
         background-color: transparent;
     }
     .stTabs [data-baseweb="tab"] {
         background-color: #FFFFFF;
         border: 1px solid #E2E8F0;
-        border-radius: 30px !important;
-        padding: 8px 20px !important;
+        border-radius: 25px !important;
+        padding: 6px 18px !important;
         color: #64748B;
-        transition: all 0.3s;
+        font-size: 14px;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     }
     .stTabs [aria-selected="true"] {
         background-color: #4F46E5 !important;
         color: white !important;
         border-color: #4F46E5 !important;
+        box-shadow: 0 4px 10px rgba(79, 70, 229, 0.3);
     }
 
-    /* Action Panel Badges */
-    .step-badge {
-        padding: 4px 10px;
-        border-radius: 8px;
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
+    /* Thin Divider */
+    .thin-divider {
+        height: 1px;
+        background-color: #E2E8F0;
+        margin: 20px 15px;
+        opacity: 0.6;
+    }
+
+    /* Metrics Styling */
+    [data-testid="stMetricValue"] {
+        font-size: 28px;
         font-weight: 700;
+        color: #1E293B;
     }
-    .status-ready { background-color: #DCFCE7; color: #15803d; }
-    .status-setup { background-color: #FEF3C7; color: #92400e; }
-    .status-locked { background-color: #F1F5F9; color: #64748b; }
-
-    /* Hide Default Streamlit Elements */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
     </style>
     """, unsafe_allow_html=True)
