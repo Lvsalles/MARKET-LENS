@@ -24,35 +24,48 @@ def run_etl_batch(*, files_data, report_name, snapshot_date, contract_path):
         engine = get_engine()
         import_id = str(uuid.uuid4())
         
+        # 1. Create Master Silo Record
         with engine.begin() as conn:
-            conn.execute(text("INSERT INTO public.stg_mls_imports (import_id, report_name, source_file, source_tag, snapshot_date) VALUES (:id, :name, 'Batch', 'MLS', :d)"),
-                         {"id": import_id, "name": report_name, "d": snapshot_date})
+            conn.execute(text("""
+                INSERT INTO public.stg_mls_imports (import_id, report_name, source_file, source_tag, snapshot_date) 
+                VALUES (:id, :name, 'Multi-File', 'MLS', :d)
+            """), {"id": import_id, "name": report_name, "d": snapshot_date})
 
         for item in files_data:
-            f, f_type = item['file'], item['type']
+            f, category = item['file'], item['type']
             ext = Path(f.name).suffix.lower()
             with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
                 tmp.write(f.getbuffer())
                 path = tmp.name
 
+            # 2. Process RAW Data
             df_raw = pd.read_csv(path) if ext == '.csv' else pd.read_excel(path)
-            # Process RAW...
+            raw_rows = []
+            for i, (_, r) in enumerate(df_raw.iterrows(), start=1):
+                clean_d = {k: (None if pd.isna(v) else v) for k, v in r.to_dict().items()}
+                js = json.dumps(clean_d, default=str)
+                raw_rows.append({"id": import_id, "n": i, "h": hashlib.sha256(f"{f.name}{js}".encode()).hexdigest(), "j": js, "d": snapshot_date})
             
+            with engine.begin() as conn:
+                conn.execute(text("INSERT INTO public.stg_mls_raw (import_id, row_number, row_hash, row_json, snapshot_date) VALUES (:id, :n, :h, :j, :d) ON CONFLICT DO NOTHING"), raw_rows)
+
+            # 3. Process Classified Data
             df_class = classify_xlsx(xlsx_path=Path(path), contract_path=Path(contract_path), snapshot_date=snapshot_date)
-            df_class["import_id"], df_class["asset_class"] = import_id, f_type
+            df_class["import_id"] = import_id
+            df_class["asset_class"] = category # "Properties", "Land", or "Rental"
             
-            # Clean numeric values
             num_cols = ['list_price', 'close_price', 'beds', 'full_baths', 'heated_area', 'tax', 'adom', 'cdom']
             for c in [col for col in num_cols if col in df_class.columns]:
                 df_class[c] = df_class[c].apply(_clean_numeric)
             
             records = df_class.replace({np.nan: None}).to_dict(orient="records")
             if records:
-                cols = ", ".join(df_class.columns)
-                vals = ", ".join([f":{c}" for c in df_class.columns])
+                cols_list = ", ".join(df_class.columns)
+                vals_list = ", ".join([f":{c}" for c in df_class.columns])
                 with engine.begin() as conn:
-                    conn.execute(text(f"INSERT INTO public.stg_mls_classified ({cols}) VALUES ({vals})"), records)
+                    conn.execute(text(f"INSERT INTO public.stg_mls_classified ({cols_list}) VALUES ({vals_list})"), records)
             os.remove(path)
+            
         return {"ok": True, "import_id": import_id}
     except Exception as e:
         return {"ok": False, "error": str(e)}
