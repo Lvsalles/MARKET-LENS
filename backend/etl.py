@@ -32,7 +32,6 @@ def run_etl_batch(*, files_data: List[Dict[str, Any]], report_name: str, snapsho
         engine = get_engine()
         import_id = str(uuid.uuid4())
         
-        # 1. Master Record
         with engine.begin() as conn:
             conn.execute(text("""
                 INSERT INTO public.stg_mls_imports (import_id, report_name, source_file, source_tag, snapshot_date) 
@@ -40,32 +39,24 @@ def run_etl_batch(*, files_data: List[Dict[str, Any]], report_name: str, snapsho
             """), {"id": import_id, "name": report_name, "f": f"{len(files_data)} files", "d": snapshot_date})
 
         for item in files_data:
-            uploaded_file = item['file']
-            # IMPORTANT: This ensures the data goes to the right bucket
-            user_assigned_class = item['type'] 
-            file_ext = Path(uploaded_file.name).suffix.lower()
+            f, f_type = item['file'], item['type']
+            ext = Path(f.name).suffix.lower()
+            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                tmp.write(f.getbuffer())
+                path = Path(tmp.name)
 
-            with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp:
-                tmp.write(uploaded_file.getbuffer())
-                file_path = Path(tmp.name)
-
-            # 2. RAW
-            df_raw = pd.read_csv(file_path) if file_ext == '.csv' else pd.read_excel(file_path)
+            df_raw = pd.read_csv(path) if ext == '.csv' else pd.read_excel(path)
             raw_rows = []
             for i, (_, r) in enumerate(df_raw.iterrows(), start=1):
-                clean_dict = {k: (None if pd.isna(v) else v) for k, v in r.to_dict().items()}
-                js = json.dumps(clean_dict, default=str)
-                raw_rows.append({
-                    "id": import_id, "n": i, "h": hashlib.sha256(f"{uploaded_file.name}{js}".encode()).hexdigest(), "j": js, "d": snapshot_date
-                })
+                clean_d = {k: (None if pd.isna(v) else v) for k, v in r.to_dict().items()}
+                js = json.dumps(clean_d, default=str)
+                raw_rows.append({"id": import_id, "n": i, "h": hashlib.sha256(f"{f.name}{js}".encode()).hexdigest(), "j": js, "d": snapshot_date})
             
             with engine.begin() as conn:
                 conn.execute(text("INSERT INTO public.stg_mls_raw (import_id, row_number, row_hash, row_json, snapshot_date) VALUES (:id, :n, :h, :j, :d) ON CONFLICT DO NOTHING"), raw_rows)
 
-            # 3. CLASSIFIED with Bucket Isolation
-            df_class = classify_xlsx(xlsx_path=file_path, contract_path=Path(contract_path), snapshot_date=snapshot_date)
-            df_class["import_id"] = import_id
-            df_class["asset_class"] = user_assigned_class # This fixes the mixing!
+            df_class = classify_xlsx(xlsx_path=path, contract_path=Path(contract_path), snapshot_date=snapshot_date)
+            df_class["import_id"], df_class["asset_class"] = import_id, f_type
             
             num_cols = ['list_price', 'close_price', 'beds', 'full_baths', 'heated_area', 'tax', 'adom', 'cdom']
             for c in [col for col in num_cols if col in df_class.columns]:
@@ -73,14 +64,11 @@ def run_etl_batch(*, files_data: List[Dict[str, Any]], report_name: str, snapsho
             
             df_class = df_class.replace({np.nan: None})
             records = df_class.to_dict(orient="records")
-            
             if records:
-                cols_list = ", ".join(df_class.columns)
-                vals_list = ", ".join([f":{c}" for c in df_class.columns])
+                cols, vals = ", ".join(df_class.columns), ", ".join([f":{c}" for c in df_class.columns])
                 with engine.begin() as conn:
-                    conn.execute(text(f"INSERT INTO public.stg_mls_classified ({cols_list}) VALUES ({vals_list})"), records)
-            os.remove(file_path)
-
+                    conn.execute(text(f"INSERT INTO public.stg_mls_classified ({cols}) VALUES ({vals})"), records)
+            os.remove(path)
         return ETLResult(ok=True, import_id=import_id)
     except Exception as e:
         return ETLResult(ok=False, error=str(e))
