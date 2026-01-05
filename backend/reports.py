@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 from sqlalchemy import text
 from backend.etl import get_engine
 
@@ -12,14 +13,10 @@ class MarketReports:
             return pd.read_sql(query, conn)
 
     def load_report_data(self, import_id, asset_class):
-        """Strictly filters by Report ID and the Sidebar Category."""
-        # Mapping UI names to DB values
-        mapping = {"Properties": "residential_sale", "Land": "land", "Rental": "rental"}
-        db_class = mapping.get(asset_class, asset_class.lower())
-        
+        """Strict isolation by ID and Category."""
         query = text("SELECT * FROM public.stg_mls_classified WHERE import_id = :id AND asset_class = :cls")
         with self.engine.connect() as conn:
-            return pd.read_sql(query, conn, params={"id": import_id, "cls": db_class})
+            return pd.read_sql(query, conn, params={"id": import_id, "cls": asset_class})
 
     def get_inventory_overview(self, df):
         if df.empty: return pd.DataFrame()
@@ -27,4 +24,12 @@ class MarketReports:
             Listings=('ml_number', 'count'),
             Avg_Price=('list_price', 'mean'),
             Avg_Size=('heated_area', 'mean')
+        ).reset_index().rename(columns={'zip': 'ZIP CODE'})
+
+    def get_comparison_matrix(self, df):
+        if df.empty: return pd.DataFrame()
+        return df.groupby('zip').agg(
+            Volume=('ml_number', 'count'),
+            Avg_Price=('list_price', 'mean'),
+            Avg_ADOM=('adom', 'mean')
         ).reset_index().rename(columns={'zip': 'ZIP CODE'})
