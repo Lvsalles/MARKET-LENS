@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, text
 
 def get_engine():
     url = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
-    if url.startswith("postgres://"):
+    if url and url.startswith("postgres://"):
         url = url.replace("postgres://", "postgresql://", 1)
     return create_engine(url, pool_pre_ping=True)
 
@@ -26,10 +26,12 @@ def run_batch_etl(files_data, report_name, snapshot_date):
         engine = get_engine()
         import_id = str(uuid.uuid4())
         
-        # 1. Create Master Silo
+        # 1. Create the Silo Header
         with engine.begin() as conn:
-            conn.execute(text("INSERT INTO public.stg_mls_imports (import_id, report_name, source_file, source_tag, snapshot_date) VALUES (:id, :n, 'Batch', 'MLS', :d)"),
-                         {"id": import_id, "n": report_name, "d": snapshot_date})
+            conn.execute(text("""
+                INSERT INTO public.stg_mls_imports (import_id, report_name, source_file, source_tag, snapshot_date) 
+                VALUES (:id, :name, 'Batch Upload', 'MLS', :d)
+            """), {"id": import_id, "name": report_name, "d": snapshot_date})
 
         for item in files_data:
             f, category = item['file'], item['type']
@@ -38,12 +40,12 @@ def run_batch_etl(files_data, report_name, snapshot_date):
                 tmp.write(f.getbuffer())
                 path = tmp.name
 
-            # 2. Classify and force category
+            # 2. Run Classification logic
             df_cls = classify_xlsx(xlsx_path=Path(path), contract_path=Path("backend/contract/mls_column_contract.yaml"), snapshot_date=snapshot_date)
             df_cls["import_id"] = import_id
-            df_cls["asset_class"] = category # Forces 'Properties', 'Land', or 'Rental'
+            df_cls["asset_class"] = category # Strictly 'Properties', 'Land', or 'Rental'
 
-            # Clean numbers
+            # 3. Numeric Cleaning
             num_cols = ['list_price', 'close_price', 'beds', 'full_baths', 'heated_area', 'tax', 'adom', 'cdom']
             for c in [col for col in num_cols if col in df_cls.columns]:
                 df_cls[c] = df_cls[c].apply(_clean_numeric)
@@ -54,6 +56,7 @@ def run_batch_etl(files_data, report_name, snapshot_date):
                 with engine.begin() as conn:
                     conn.execute(text(f"INSERT INTO public.stg_mls_classified ({cols}) VALUES ({vals})"), records)
             os.remove(path)
+            
         return {"ok": True, "import_id": import_id}
     except Exception as e:
         return {"ok": False, "error": str(e)}
