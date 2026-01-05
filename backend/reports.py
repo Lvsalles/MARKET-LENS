@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 from sqlalchemy import text
 from backend.etl import get_engine
 
@@ -8,37 +7,24 @@ class MarketReports:
         self.engine = get_engine()
 
     def list_all_reports(self):
-        """Lists all saved reports for the sidebar selector."""
         query = text("SELECT import_id, report_name, snapshot_date FROM public.stg_mls_imports ORDER BY imported_at DESC")
         with self.engine.connect() as conn:
             return pd.read_sql(query, conn)
 
     def load_report_data(self, import_id, asset_class):
-        """Loads data strictly isolated by Report ID and Asset Class."""
-        query = text("""
-            SELECT * FROM public.stg_mls_classified 
-            WHERE import_id = :id AND asset_class = :cls
-        """)
+        """Strictly filters by Report ID and the Sidebar Category."""
+        # Mapping UI names to DB values
+        mapping = {"Properties": "residential_sale", "Land": "land", "Rental": "rental"}
+        db_class = mapping.get(asset_class, asset_class.lower())
+        
+        query = text("SELECT * FROM public.stg_mls_classified WHERE import_id = :id AND asset_class = :cls")
         with self.engine.connect() as conn:
-            return pd.read_sql(query, conn, params={"id": import_id, "cls": asset_class})
+            return pd.read_sql(query, conn, params={"id": import_id, "cls": db_class})
 
     def get_inventory_overview(self, df):
-        """Aggregated stats by ZIP for the Overview tab."""
         if df.empty: return pd.DataFrame()
         return df.groupby('zip').agg(
             Listings=('ml_number', 'count'),
             Avg_Price=('list_price', 'mean'),
-            Avg_Size=('heated_area', 'mean'),
-            Avg_Price_Sqft=('lp_sqft', 'mean')
+            Avg_Size=('heated_area', 'mean')
         ).reset_index().rename(columns={'zip': 'ZIP CODE'})
-
-    def get_comparison_matrix(self, df):
-        """Matrix for the Comparison tab."""
-        if df.empty: return pd.DataFrame()
-        matrix = df.groupby('zip').agg(
-            Volume=('ml_number', 'count'),
-            Avg_Price=('list_price', 'mean'),
-            Avg_ADOM=('adom', 'mean'),
-            Price_Sqft=('lp_sqft', 'mean')
-        ).reset_index()
-        return matrix.rename(columns={'zip': 'ZIP CODE'})
