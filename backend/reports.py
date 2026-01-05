@@ -4,20 +4,15 @@ from backend.etl import get_engine
 
 class MarketReports:
     def __init__(self):
-        self.engine = None
-        try:
-            self.engine = get_engine()
-        except:
-            pass
+        self.engine = get_engine()
 
     def list_all_reports(self):
-        if self.engine is None: return pd.DataFrame()
         query = text("SELECT import_id, report_name, snapshot_date FROM public.stg_mls_imports ORDER BY imported_at DESC")
         with self.engine.connect() as conn:
             return pd.read_sql(query, conn)
 
     def load_report_data(self, import_id, category):
-        if self.engine is None: return pd.DataFrame()
+        """Loads data strictly by Silo ID and the exact Category name from the Sidebar."""
         query = text("SELECT * FROM public.stg_mls_classified WHERE import_id = :id AND asset_class = :cls")
         with self.engine.connect() as conn:
             return pd.read_sql(query, conn, params={"id": import_id, "cls": category})
