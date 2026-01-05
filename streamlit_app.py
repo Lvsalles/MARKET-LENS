@@ -1,11 +1,13 @@
 import streamlit as st
 from datetime import date
-from backend.etl import run_batch_etl
+from backend.etl import run_etl_batch
 from backend.core.reports import MarketReports
 from backend.ui.styles import apply_premium_style
 
-st.set_page_config(page_title="Market Lens Enterprise", layout="wide")
+# MUST BE FIRST LINE
+st.set_page_config(page_title="Market Lens Enterprise", layout="wide", initial_sidebar_state="expanded")
 apply_premium_style()
+
 reports = MarketReports()
 
 # State Management
@@ -14,89 +16,81 @@ if 'active_report_id' not in st.session_state: st.session_state.active_report_id
 
 # --- SIDEBAR NAVIGATION ---
 with st.sidebar:
-    st.markdown("<h2 style='color:#1E293B; margin-left:10px;'>Market Lens</h2>", unsafe_allow_html=True)
-    if st.button("✨ New Report", use_container_width=True): st.session_state.view = 'New Report'
-    st.markdown("<div class='nav-divider'></div>", unsafe_allow_html=True)
+    st.markdown("<h1 style='font-size: 24px; color: #1E293B; margin-left:10px;'>Market Lens</h1>", unsafe_allow_html=True)
     
-    st.markdown("<p style='font-size:11px; font-weight:700; color:#94A3B8; margin-left:15px;'>ANALYTICS</p>", unsafe_allow_html=True)
+    if st.button("✨ New Report", use_container_width=True): st.session_state.view = 'New Report'
+    if st.button("📑 Reports Hub", use_container_width=True): st.session_state.view = 'Reports'
+    
+    st.markdown("<div class='nav-divider'></div>", unsafe_allow_html=True)
+    st.markdown("<p style='font-size: 11px; font-weight: 700; color: #94A3B8; margin-left: 15px;'>ANALYTICS</p>", unsafe_allow_html=True)
+    
     if st.button("🏠 Properties", use_container_width=True): st.session_state.view = 'Properties'
     if st.button("🌳 Land", use_container_width=True): st.session_state.view = 'Land'
     if st.button("🏢 Rental", use_container_width=True): st.session_state.view = 'Rental'
 
     st.markdown("<div class='nav-divider'></div>", unsafe_allow_html=True)
     
-    # Report Selector Logic
+    # Isolated Report Selector
     st.subheader("Active Analysis")
     try:
         saved = reports.list_all_reports()
         if not saved.empty:
-            opts = {f"{r['report_name']} ({r['snapshot_date']})": r['import_id'] for _, r in saved.iterrows()}
+            opts = {f"{r['report_name']}": r['import_id'] for _, r in saved.iterrows()}
             sel = st.selectbox("Current Dataset:", options=list(opts.keys()), label_visibility="collapsed")
             st.session_state.active_report_id = opts[sel]
         else:
-            st.caption("No reports available.")
+            st.caption("No reports created yet.")
     except:
-        st.error("Database error.")
+        st.error("Database Connection Error")
 
 # --- WORKSPACE ROUTING ---
 view = st.session_state.view
 
 if view == 'New Report':
-    st.title("Market Intelligence Ingestion")
+    st.title("Data Ingestion & Classification")
     st.markdown("<div class='main-card'>", unsafe_allow_html=True)
     files = st.file_uploader("Upload MLS Files (Max 25)", accept_multiple_files=True, type=['csv', 'xlsx'])
     
     if files:
         report_name = st.text_input("Report Name", placeholder="e.g. North Port Q1 2026")
-        st.markdown("### 📋 File Classification Queue")
-        files_to_process = []
+        st.markdown("### 📋 Classification Queue")
+        files_data = []
         for f in files:
             c1, c2 = st.columns([3, 1])
             c1.markdown(f"**📄 {f.name}**")
-            f_type = c2.selectbox("Type", ["Properties", "Land", "Rental"], key=f"t_{f.name}")
-            files_to_process.append({'file': f, 'type': f_type})
+            f_type = c2.selectbox("Type", ["Properties", "Land", "Rental"], key=f"type_{f.name}")
+            files_data.append({'file': f, 'type': f_type})
         
         if st.button("🚀 Run Batch ETL", type="primary", use_container_width=True):
             if report_name:
-                with st.spinner("Processing..."):
-                    res = run_batch_etl(files_to_process, report_name, date.today())
-                    if res['ok']:
-                        st.success("Success!")
-                        st.session_state.active_report_id = res['import_id']
-                        st.session_state.view = 'Properties'
-                        st.rerun()
-            else: st.warning("Please name your report.")
+                res = run_etl_batch(files_data=files_data, report_name=report_name, snapshot_date=date.today(), contract_path="backend/contract/mls_column_contract.yaml")
+                if res['ok']: st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
 elif view in ['Properties', 'Land', 'Rental']:
     if st.session_state.active_report_id:
+        # Fixed the TypeError: sending 2 arguments
         df = reports.load_report_data(st.session_state.active_report_id, view)
-        st.title(f"{view} Workspace")
+        st.title(f"{view} Analytics")
         
         if not df.empty:
             zips = sorted([str(z) for z in df['zip'].unique() if z])
             tab_labels = ["📊 Overview", "⚖️ Compare"] + [f"📍 {z}" for z in zips]
             tabs = st.tabs(tab_labels)
             
-            with tabs[0]:
+            with tabs[0]: # Overview
                 st.markdown("<div class='main-card'>", unsafe_allow_html=True)
                 st.dataframe(reports.get_inventory_overview(df), use_container_width=True)
                 st.markdown("</div>", unsafe_allow_html=True)
-            
-            with tabs[1]:
-                st.markdown("<div class='main-card'>", unsafe_allow_html=True)
-                st.subheader("ZIP Code Comparison")
-                st.write("Comparison metrics logic goes here.")
-                st.markdown("</div>", unsafe_allow_html=True)
 
+            # ZIP Tabs
             for i, zip_code in enumerate(zips):
                 with tabs[i+2]:
                     st.markdown("<div class='main-card'>", unsafe_allow_html=True)
-                    zip_df = df[df['zip'].astype(str) == zip_code]
-                    st.metric("Listings", len(zip_df))
-                    st.dataframe(zip_df, use_container_width=True)
+                    st.subheader(f"Region: {zip_code}")
+                    st.dataframe(df[df['zip'].astype(str) == zip_code], use_container_width=True)
                     st.markdown("</div>", unsafe_allow_html=True)
         else:
             st.info(f"No {view} data in this report.")
     else:
-        st.warning("Select or create a report first.")
+        st.warning("Please select a report in the sidebar.")
