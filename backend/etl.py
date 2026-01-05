@@ -1,4 +1,3 @@
-from __future__ import annotations
 import hashlib, json, os, tempfile, uuid
 from datetime import date
 from pathlib import Path
@@ -8,6 +7,7 @@ from sqlalchemy import create_engine, text
 
 def get_engine():
     url = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    if not url: raise RuntimeError("DATABASE_URL is missing")
     return create_engine(url, pool_pre_ping=True)
 
 def _clean_num(val):
@@ -35,29 +35,18 @@ def run_batch_etl(files_data, report_name, snapshot_date):
                 tmp.write(f.getbuffer())
                 path = tmp.name
 
-            # 1. RAW
             df_raw = pd.read_csv(path) if ext == '.csv' else pd.read_excel(path)
-            raw_batch = []
-            for i, (_, r) in enumerate(df_raw.iterrows(), start=1):
-                js = json.dumps({k: (None if pd.isna(v) else v) for k, v in r.to_dict().items()}, default=str)
-                raw_batch.append({"id": import_id, "n": i, "h": hashlib.sha256(js.encode()).hexdigest(), "j": js, "d": snapshot_date})
             
-            with engine.begin() as conn:
-                conn.execute(text("INSERT INTO public.stg_mls_raw (import_id, row_number, row_hash, row_json, snapshot_date) VALUES (:id, :n, :h, :j, :d)"), raw_batch)
-
-            # 2. CLASSIFIED
             df_cls = classify_xlsx(xlsx_path=Path(path), contract_path=Path("backend/contract/mls_column_contract.yaml"), snapshot_date=snapshot_date)
             df_cls["import_id"], df_cls["asset_class"] = import_id, category
             
-            # Clean all numeric columns
             for c in df_cls.columns:
-                if any(x in c.lower() for x in ['price', 'area', 'beds', 'baths', 'tax', 'adom', 'cdom', 'sqft']):
+                if any(x in c.lower() for x in ['price', 'area', 'beds', 'tax', 'adom']):
                     df_cls[c] = df_cls[c].apply(_clean_num)
             
             records = df_cls.replace({np.nan: None}).to_dict(orient="records")
             if records:
-                cols = ", ".join(df_cls.columns)
-                vals = ", ".join([f":{c}" for c in df_cls.columns])
+                cols, vals = ", ".join(df_cls.columns), ", ".join([f":{c}" for c in df_cls.columns])
                 with engine.begin() as conn:
                     conn.execute(text(f"INSERT INTO public.stg_mls_classified ({cols}) VALUES ({vals})"), records)
             os.remove(path)
