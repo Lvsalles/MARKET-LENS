@@ -1,64 +1,92 @@
-# backend/ui/styles.py
 import streamlit as st
 
 def apply_premium_style():
     st.markdown("""
     <style>
-    /* Global Background & Typography */
+    /* Global Canvas: Very Light Blue/White to reduce fatigue */
     .stApp {
-        background-color: #F8FAFC;
+        background-color: #F4F7FA;
     }
-    
-    /* Sidebar Styling */
+
+    /* Sidebar: Airy, Light Neutral, No Borders */
     section[data-testid="stSidebar"] {
-        background-color: #FFFFFF !important;
-        border-right: 1px solid #E2E8F0;
+        background-color: #F8FAFC !important;
+        border-right: none !important;
+        box-shadow: none !important;
         width: 280px !important;
     }
 
-    /* Premium Cards */
-    div.stActionButton button {
-        border-radius: 12px;
+    /* Sidebar Items: Smooth Hover & Indicator */
+    .stButton > button {
+        border: none;
+        background-color: transparent;
+        color: #475569;
+        text-align: left;
+        padding: 10px 16px;
+        border-radius: 10px;
+        transition: all 0.2s ease-in-out;
+        font-weight: 500;
+        width: 100%;
     }
-    
+
+    .stButton > button:hover {
+        background-color: #EEF2FF;
+        color: #4F46E5;
+        box-shadow: inset 4px 0px 0px #4F46E5; /* Left indicator bar */
+    }
+
+    /* Active Sidebar Item */
+    div[data-testid="stSidebarNav"] .active {
+        background-color: #E0E7FF !important;
+        color: #4F46E5 !important;
+        font-weight: 600 !important;
+    }
+
+    /* Main Floating Cards */
     .main-card {
         background-color: #FFFFFF;
-        padding: 24px;
+        padding: 30px;
         border-radius: 16px;
-        border: 1px solid #E2E8F0;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
-        margin-bottom: 20px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03);
+        border: 1px solid rgba(226, 232, 240, 0.6);
+        margin-bottom: 24px;
     }
 
-    /* Status Badges */
-    .badge {
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-size: 12px;
-        font-weight: 600;
-    }
-    .badge-ready { background-color: #DCFCE7; color: #166534; }
-    .badge-setup { background-color: #FEF3C7; color: #92400E; }
-    .badge-locked { background-color: #F1F5F9; color: #475569; }
-
-    /* Action Panel (Right Side) */
-    .action-panel {
-        background-color: #FFFFFF;
-        border-left: 1px solid #E2E8F0;
-        padding: 20px;
-        height: 100vh;
-    }
-
-    /* Tab Styling */
+    /* Modern Pill Tabs */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
+        gap: 12px;
         background-color: transparent;
     }
     .stTabs [data-baseweb="tab"] {
         background-color: #FFFFFF;
         border: 1px solid #E2E8F0;
-        border-radius: 8px 8px 0px 0px;
-        padding: 8px 16px;
+        border-radius: 30px !important;
+        padding: 8px 20px !important;
+        color: #64748B;
+        transition: all 0.3s;
     }
+    .stTabs [aria-selected="true"] {
+        background-color: #4F46E5 !important;
+        color: white !important;
+        border-color: #4F46E5 !important;
+    }
+
+    /* Action Panel Badges */
+    .step-badge {
+        padding: 4px 10px;
+        border-radius: 8px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        font-weight: 700;
+    }
+    .status-ready { background-color: #DCFCE7; color: #15803d; }
+    .status-setup { background-color: #FEF3C7; color: #92400e; }
+    .status-locked { background-color: #F1F5F9; color: #64748b; }
+
+    /* Hide Default Streamlit Elements */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
     </style>
     """, unsafe_allow_html=True)
