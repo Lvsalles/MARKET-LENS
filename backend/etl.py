@@ -15,14 +15,10 @@ class ETLResult:
     error: Optional[str] = None
 
 def get_engine():
-    """Main database engine provider."""
     url = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
-    if not url:
-        raise RuntimeError("Database URL environment variable is missing.")
     return create_engine(url, pool_pre_ping=True)
 
 def _clean_numeric(val: Any) -> Any:
-    """Cleans currency strings like '$1,234.50' into floats."""
     if pd.isna(val): return None
     if isinstance(val, str):
         clean_val = val.replace('$', '').replace(',', '').strip()
@@ -31,13 +27,12 @@ def _clean_numeric(val: Any) -> Any:
     return val
 
 def run_etl_batch(*, files_data: List[Dict[str, Any]], report_name: str, snapshot_date: date, contract_path: str) -> ETLResult:
-    """Processes up to 25 files into a single isolated report."""
     try:
         from backend.contract.mls_classify import classify_xlsx
         engine = get_engine()
         import_id = str(uuid.uuid4())
         
-        # 1. Create Master Record for this specific report
+        # 1. Master Record
         with engine.begin() as conn:
             conn.execute(text("""
                 INSERT INTO public.stg_mls_imports (import_id, report_name, source_file, source_tag, snapshot_date) 
@@ -46,37 +41,32 @@ def run_etl_batch(*, files_data: List[Dict[str, Any]], report_name: str, snapsho
 
         for item in files_data:
             uploaded_file = item['file']
-            data_type = item['type']
+            # IMPORTANT: This ensures the data goes to the right bucket
+            user_assigned_class = item['type'] 
             file_ext = Path(uploaded_file.name).suffix.lower()
 
             with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp:
                 tmp.write(uploaded_file.getbuffer())
                 file_path = Path(tmp.name)
 
-            # 2. Process Raw Data
+            # 2. RAW
             df_raw = pd.read_csv(file_path) if file_ext == '.csv' else pd.read_excel(file_path)
             raw_rows = []
             for i, (_, r) in enumerate(df_raw.iterrows(), start=1):
                 clean_dict = {k: (None if pd.isna(v) else v) for k, v in r.to_dict().items()}
                 js = json.dumps(clean_dict, default=str)
                 raw_rows.append({
-                    "id": import_id, "n": i, 
-                    "h": hashlib.sha256(f"{uploaded_file.name}{js}".encode()).hexdigest(), 
-                    "j": js, "d": snapshot_date
+                    "id": import_id, "n": i, "h": hashlib.sha256(f"{uploaded_file.name}{js}".encode()).hexdigest(), "j": js, "d": snapshot_date
                 })
             
             with engine.begin() as conn:
-                conn.execute(text("""
-                    INSERT INTO public.stg_mls_raw (import_id, row_number, row_hash, row_json, snapshot_date) 
-                    VALUES (:id, :n, :h, :j, :d) ON CONFLICT DO NOTHING
-                """), raw_rows)
+                conn.execute(text("INSERT INTO public.stg_mls_raw (import_id, row_number, row_hash, row_json, snapshot_date) VALUES (:id, :n, :h, :j, :d) ON CONFLICT DO NOTHING"), raw_rows)
 
-            # 3. Process Classified Data
+            # 3. CLASSIFIED with Bucket Isolation
             df_class = classify_xlsx(xlsx_path=file_path, contract_path=Path(contract_path), snapshot_date=snapshot_date)
             df_class["import_id"] = import_id
-            df_class["asset_class"] = data_type # User-defined classification
+            df_class["asset_class"] = user_assigned_class # This fixes the mixing!
             
-            # Clean numeric columns to avoid "out of range" or type errors
             num_cols = ['list_price', 'close_price', 'beds', 'full_baths', 'heated_area', 'tax', 'adom', 'cdom']
             for c in [col for col in num_cols if col in df_class.columns]:
                 df_class[c] = df_class[c].apply(_clean_numeric)
@@ -89,7 +79,6 @@ def run_etl_batch(*, files_data: List[Dict[str, Any]], report_name: str, snapsho
                 vals_list = ", ".join([f":{c}" for c in df_class.columns])
                 with engine.begin() as conn:
                     conn.execute(text(f"INSERT INTO public.stg_mls_classified ({cols_list}) VALUES ({vals_list})"), records)
-
             os.remove(file_path)
 
         return ETLResult(ok=True, import_id=import_id)
