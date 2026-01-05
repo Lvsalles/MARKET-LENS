@@ -7,4 +7,5 @@ numpy
 pyyaml
 openpyxl
 plotly
+matplotlib
 google-generativeai
